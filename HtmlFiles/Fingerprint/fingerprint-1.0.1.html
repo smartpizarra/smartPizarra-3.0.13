@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Pizarra</title>
+    <!-- Sin Font Awesome: los iconos son SVG integrados (sin descargas, funcionan sin internet) -->
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --accent: hsl(187, 100%, 38%); /* color del sitio web (rota despacio: anti-quemado) */
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a237e;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a237e 0%, #311b92 100%);
+            color: white;
+            position: relative;
+        }
+
+        /* #stage: se rota 0/90/180/270. Su ancho y alto los fija el JS
+           (se intercambian al rotar 90 o 270) */
+        #stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1;
+        }
+
+        /* #scaler: recibe el porcentaje de tamaño (scale), escala desde su centro */
+        #scaler {
+            position: relative;
+            z-index: 20;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+
+        /* Variación de color de fondo: capa con opacidad animada (solo composición, sin repintar) */
+        body::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, hsl(220, 70%, 15%) 0%, hsl(260, 65%, 18%) 100%);
+            opacity: 0;
+            animation: bgShift 40s ease-in-out infinite alternate;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes bgShift {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+
+        /* Animación ligera compartida por los textos */
+        @keyframes drift {
+            0% { transform: translate(0, 0); }
+            25% { transform: translate(2px, 1px); }
+            50% { transform: translate(-1px, 2px); }
+            75% { transform: translate(1px, -1px); }
+            100% { transform: translate(-2px, -2px); }
+        }
+
+        /*
+         * IMPORTANTE: el contenedor principal, .device-info y .qr-container NO se animan.
+         * Animar transform en los ancestros del QR es lo que hacía que el canvas
+         * se borrara / parpadeara en las GPU de las TV box.
+         */
+        .device-id-container {
+            text-align: center;
+            max-width: 90%;
+            width: 500px;
+            z-index: 20;
+            position: relative;
+            background: rgba(30, 40, 100, 0.85);
+            padding: 40px 30px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(100, 150, 255, 0.3);
+        }
+
+        .logo {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 25px;
+            border-radius: 20px;
+            background: linear-gradient(45deg, #ff9800, #ff5722);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(255, 152, 0, 0.4);
+            animation: pulse 2s ease-in-out infinite alternate;
+        }
+
+        .logo.success {
+            background: linear-gradient(45deg, #4CAF50, #8BC34A);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.1); opacity: 1; }
+        }
+
+        .logo-icon {
+            font-size: 40px;
+            font-weight: bold;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 5px;
+            text-shadow: 0 2px 15px rgba(0, 0, 0, 0.4);
+            color: #e8eaf6; /* blanco suavizado: menos desgaste que #fff fijo */
+            animation: drift 9s ease-in-out infinite alternate;
+        }
+
+        /* Versión, sitio web y email: mismo aspecto que connections1.html */
+        .version {
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 10px;
+            font-style: italic;
+        }
+
+        .website {
+            font-size: 1.2rem;
+            color: var(--accent);
+            margin-bottom: 10px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .email-contact {
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+
+        .device-info {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 25px 0;
+            border: 1px solid rgba(100, 150, 255, 0.3);
+        }
+
+        .device-id-display {
+            font-size: 1.8rem;
+            font-family: 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            word-break: break-all;
+            color: #4FC3F7;
+            border: 2px solid rgba(79, 195, 247, 0.3);
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: drift 7s ease-in-out infinite alternate;
+        }
+
+        .device-id-display.offline {
+            color: #ff9800;
+        }
+
+        .qr-container {
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #qr-code {
+            width: 200px;
+            height: 200px;
+            margin: 0 auto;
+            background: white;
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .qr-wrapper {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+        }
+
+        .qr-box {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* qrcode.js genera <canvas> + <img>; se escalan al tamaño del recuadro */
+        .qr-box canvas,
+        .qr-box img {
+            max-width: 100%;
+            height: auto;
+            image-rendering: pixelated;
+        }
+
+        .qr-error {
+            color: #f44336;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Spinner en CSS puro: no depende de Font Awesome */
+        .loading-qr {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 6px solid rgba(255, 152, 0, 0.25);
+            border-top-color: #ff9800;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .instructions {
+            margin-top: 25px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 15px;
+            text-align: left;
+            font-size: 1rem;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.8);
+            animation: drift 10s ease-in-out infinite alternate;
+        }
+
+        .instruction-item {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .instruction-icon {
+            margin-right: 12px;
+            width: 22px;
+            height: 22px;
+            min-width: 22px;
+            stroke: #4fc3f7;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .status-message {
+            font-size: 1.2rem;
+            color: #ff9800;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(255, 152, 0, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 152, 0, 0.3);
+            animation: statusPulse 3s ease-in-out infinite alternate;
+        }
+
+        .status-message.success {
+            color: #4CAF50;
+            background: rgba(76, 175, 80, 0.1);
+            border-color: rgba(76, 175, 80, 0.3);
+        }
+
+        @keyframes statusPulse {
+            0% { opacity: 0.7; transform: scale(0.98); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .contact-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            font-size: 0.9em;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* ---------- Protección anti-quemado (burn-in) ---------- */
+        /* Capa negra que atenúa la pantalla en reposo (solo cambia opacity: barato en GPU) */
+        #dim-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            opacity: 0;
+            transition: opacity 4s ease-in-out;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        body.dimmed #dim-overlay {
+            opacity: 0.45;
+        }
+
+        /* En reposo se detienen los pulsos del logo/estado: menos trabajo y menos brillo fijo */
+        body.dimmed .logo,
+        body.dimmed .status-message {
+            animation-play-state: paused;
+        }
+
+        /* Iconos flotantes de fondo */
+        #floating-icons-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Iconos flotantes: SVG integrados (sin Font Awesome ni filtros de sombra) */
+        .floating-icon {
+            position: absolute;
+            width: 34px;
+            height: 34px;
+            will-change: transform;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .icon-1 { color: #4CAF50; }
+        .icon-2 { color: #8BC34A; }
+        .icon-3 { color: #66ff99; }
+        .icon-4 { color: #66ffff; }
+        .icon-5 { color: #4FC3F7; }
+        .icon-6 { color: #6699ff; }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(20px, 30px) rotate(5deg); }
+            50% { transform: translate(-15px, 20px) rotate(-5deg); }
+            75% { transform: translate(10px, -10px) rotate(3deg); }
+        }
+
+        @keyframes float2 {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(30px, -20px) rotate(-8deg); }
+            66% { transform: translate(-20px, 25px) rotate(8deg); }
+        }
+
+        @keyframes float3 {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            20% { transform: translate(-25px, 15px) rotate(-3deg); }
+            40% { transform: translate(20px, -25px) rotate(3deg); }
+            60% { transform: translate(-15px, -20px) rotate(-5deg); }
+            80% { transform: translate(25px, 10px) rotate(5deg); }
+        }
+
+        @media (min-width: 1200px) {
+            .device-id-container {
+                width: 600px;
+                padding: 50px 40px;
+            }
+
+            h1 { font-size: 3rem; }
+            .version { font-size: 1.3rem; }
+            .website { font-size: 1.4rem; }
+            .email-contact { font-size: 1.2rem; }
+            .device-id-display { font-size: 2rem; }
+            #qr-code { width: 220px; height: 220px; }
+        }
+
+        @media (max-width: 768px) {
+            .device-id-container { padding: 30px 20px; }
+
+            h1 { font-size: 2.2rem; }
+            .version { font-size: 0.9rem; }
+            .website { font-size: 1rem; }
+            .email-contact { font-size: 0.9rem; }
+            .device-id-display { font-size: 1.4rem; min-height: 70px; }
+            #qr-code { width: 180px; height: 180px; }
+            .logo { width: 80px; height: 80px; }
+            .logo-icon { font-size: 32px; }
+        }
+
+        @media (max-width: 480px) {
+            h1 { font-size: 1.8rem; }
+            .device-id-display { font-size: 1.2rem; min-height: 60px; }
+            #qr-code { width: 150px; height: 150px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="stage">
+    <!-- Iconos flotantes (rotan con el escenario, pero no se escalan) -->
+    <div id="floating-icons-container"></div>
+    <div id="scaler">
+
+    <div class="device-id-container">
+        <div class="logo" id="logo">
+            <div class="logo-icon">SP</div>
+        </div>
+
+        <h1>Smart Pizarra</h1>
+
+        <div class="version" id="versionText">Versión: 3.0.1</div>
+        <div class="website" id="websiteUrl">smartpizarra.com</div>
+        <div class="email-contact" id="emailContact">smartpizarra@gmail.com</div>
+
+        <div class="device-info">
+            <div class="device-id-display" id="device-id">Solicitando ID del dispositivo...</div>
+
+            <div class="qr-container">
+                <div id="qr-code">
+                    <div class="qr-wrapper" id="qr-wrapper">
+                        <div class="loading-qr"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-message" id="connection-status">
+                Esperando identificación del dispositivo...
+            </div>
+        </div>
+
+        <div class="instructions">
+            <div class="instruction-item">
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" /><path d="M12 16v-5M12 8h.01" />
+                </svg>
+                <span>Identificación única de tu dispositivo.</span>
+            </div>
+
+            <div class="instruction-item">
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M21 3v6h-6M3 21v-6h6" />
+                </svg>
+                <span>La aplicación solicita el ID automáticamente.</span>
+            </div>
+
+            <div class="instruction-item">
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <rect x="6" y="2" width="12" height="20" rx="2" /><path d="M11 18h2" />
+                </svg>
+                <span>La aplicación generará un código QR automáticamente.</span>
+            </div>
+        </div>
+
+        <div class="contact-info">
+            © 2026 Smart Pizarra. Todos los derechos reservados.
+        </div>
+    </div>
+
+    </div><!-- /#scaler -->
+    </div><!-- /#stage -->
+
+    <!-- Atenuación anti-quemado -->
+    <div id="dim-overlay"></div>
+
+    <script>
+    (function () {
+        'use strict';
+
+        // ---------------- Configuración ----------------
+        // Primero intenta una copia local (ponga qrcode.min.js junto a este HTML en los assets
+        // de Kodular para que funcione aunque la TV box arranque sin internet) y luego el CDN.
+        var QR_LIB_URLS = [
+            'qrcode.min.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'
+        ];
+        // Verificación de internet (mismo método que connections1.html)
+        var CONNECTION_CONFIG = {
+            // Cada endpoint responde con un JSON conocido (con CORS) que se LEE y se VALIDA.
+            // Así un portal cautivo, el router o un DNS local que respondan con su propia
+            // página NO cuentan como internet. Los endpoints con IP (1.1.1.1 / 8.8.8.8)
+            // no dependen del DNS local. Con que UNO sea válido, hay internet.
+            endpoints: [
+                { url: 'https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://8.8.8.8/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://dns.google/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://api.ipify.org/?format=json', type: 'ip' }
+            ],
+            timeoutMs: 5000,          // tiempo máximo de espera por verificación
+            onlineIntervalMs: 10000,  // frecuencia de verificación cuando hay internet
+            offlineIntervalMs: 5000,  // frecuencia de verificación cuando no hay internet
+            retryIntervalMs: 3000,    // reintento rápido tras un fallo estando online
+            failuresToOffline: 2      // fallos seguidos para declarar "offline" (evita falsos cortes)
+        };
+        var OFFLINE_SIGNAL_MS = 2000;
+        var QR_WATCHDOG_MS = 30000;
+        var QR_RETRY_MS = 5000;
+        var EMPTY_ID_RETRY_MS = 2000;
+        var FLOATING_ICON_COUNT = 12;
+
+        // Anti-quemado de pantalla
+        var PIXEL_SHIFT_MS = 60000;       // cada cuánto se desplaza el contenido
+        var PIXEL_SHIFT_RANGE = 30;       // desplazamiento máximo en px (±), ~21 px reales con zoom 0.7
+        var DIM_AFTER_MS = 5 * 60000;     // atenuar tras 5 min sin actividad
+        var ACCENT_SHIFT_MS = 60000;      // cada cuánto cambia el color del sitio web
+
+        // ---------------- Estado ----------------
+        var deviceId = null;
+        var isOnline = true;              // false solo cuando se confirmó "offline"
+        var internetStatus = 'unknown';   // 'unknown' | 'online' | 'offline'
+        var currentCheck = null;          // Promise de la verificación en curso
+        var checkTimer = null;
+        var failures = 0;
+        var lastLatency = 0;
+        var qrCodeInstance = null;
+        var offlineTimer = null;
+        var qrWatchdogTimer = null;
+        var qrRetryTimer = null;
+
+        // Referencias DOM cacheadas (evita getElementById repetidos)
+        var el = {};
+
+        // ---------------- Comunicación con Kodular / AppInventor ----------------
+        function sendToAppInventor(message) {
+            try {
+                if (window.AppInventor && window.AppInventor.setWebViewString) {
+                    window.AppInventor.setWebViewString(message);
+                } else if (window.android && window.android.onReceiveValue) {
+                    window.android.onReceiveValue(message);
+                } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+                    window.androidInterface.onReceiveValue(message);
+                } else {
+                    window.postMessage(message, '*');
+                }
+            } catch (e) {
+                console.log('Error enviando a AppInventor:', e);
+            }
+            console.log('Enviado a AppInventor:', message);
+        }
+
+        // Todas las respuestas llevan "internetStatus": "online" | "offline"
+        // ("" mientras la primera verificación aún no termina).
+        function send(origin, action, status, token) {
+            var msg = {
+                origin: origin,
+                action: action,
+                status: status,
+                internetStatus: internetStatus === 'unknown' ? '' : internetStatus
+            };
+            if (token !== undefined) msg.token = token;
+            sendToAppInventor(JSON.stringify(msg));
+        }
+
+        function sendConnectionStatus() {
+            sendToAppInventor(JSON.stringify({
+                origin: 'loading',
+                action: 'connection',
+                status: internetStatus,          // igual que internetStatus (compatibilidad)
+                internetStatus: internetStatus,  // estado REAL de internet
+                latency: lastLatency,
+                localNetwork: navigator.onLine,  // true = hay red local (Wi-Fi/cable), aunque no haya internet
+                checkedAt: new Date().toISOString()
+            }));
+        }
+
+        // ---------------- Token ----------------
+        // btoa seguro para UTF-8 (para IDs ASCII produce exactamente el mismo resultado que btoa)
+        function b64(str) {
+            return btoa(unescape(encodeURIComponent(str)));
+        }
+
+        function encryptDeviceId(id) {
+            try {
+                var secretKey = 'app';
+                var timestamp = Date.now().toString(36);
+                var randomStr = Math.random().toString(36).substring(2, 8);
+                // Formato: [encodedKey]:[encoded]:[timestamp]:[randomStr]
+                return b64(b64(secretKey) + ':' + b64(id) + ':' + timestamp + ':' + randomStr);
+            } catch (e) {
+                console.error('Error al encriptar deviceId:', e);
+                return id;
+            }
+        }
+
+        // ---------------- Carga de la librería QR ----------------
+        var qrLibPromise = null;
+
+        function loadScript(src) {
+            return new Promise(function (resolve, reject) {
+                var s = document.createElement('script');
+                s.src = src;
+                s.async = true;
+                s.onload = resolve;
+                s.onerror = function () {
+                    s.parentNode.removeChild(s);
+                    reject(new Error('No se pudo cargar ' + src));
+                };
+                document.head.appendChild(s);
+            });
+        }
+
+        function loadQRLib() {
+            if (window.QRCode) return Promise.resolve();
+            if (qrLibPromise) return qrLibPromise;
+
+            qrLibPromise = QR_LIB_URLS.reduce(function (chain, url) {
+                return chain.catch(function () {
+                    return loadScript(url).then(function () {
+                        if (!window.QRCode) throw new Error('QRCode no definido en ' + url);
+                    });
+                });
+            }, Promise.reject()).catch(function (err) {
+                qrLibPromise = null; // permitir reintento más tarde
+                throw err;
+            });
+            return qrLibPromise;
+        }
+
+        // ---------------- UI ----------------
+        function setStatus(text, success) {
+            el.status.textContent = text;
+            el.status.classList.toggle('success', !!success);
+        }
+
+        function setDeviceText(text, offline) {
+            el.deviceId.textContent = text;
+            el.deviceId.classList.toggle('offline', !!offline);
+        }
+
+        function showQRLoading() {
+            el.qrWrapper.innerHTML = '<div class="loading-qr"></div>';
+        }
+
+        function updateUIForOfflineMode() {
+            setDeviceText('Sin conexión a internet', true);
+            setStatus('Esperando conexión a internet para solicitar ID...', false);
+            el.logo.classList.remove('success');
+        }
+
+        // ---------------- Código QR ----------------
+        function stopQRTimers() {
+            clearInterval(qrWatchdogTimer);
+            clearTimeout(qrRetryTimer);
+            qrWatchdogTimer = null;
+            qrRetryTimer = null;
+        }
+
+        function generateQRCode(text) {
+            stopQRTimers();
+            loadQRLib().then(function () {
+                renderQR(text);
+            }).catch(function (err) {
+                onQRError(text, err);
+            });
+        }
+
+        function renderQR(text) {
+            // Si llegó otro ID mientras cargaba la librería, ignorar este
+            if (text !== deviceId) return;
+
+            if (qrCodeInstance) {
+                try { qrCodeInstance.clear(); } catch (e) { /* ignorar */ }
+                qrCodeInstance = null;
+            }
+
+            el.qrWrapper.innerHTML = '';
+            var box = document.createElement('div');
+            box.className = 'qr-box';
+            el.qrWrapper.appendChild(box);
+
+            try {
+                qrCodeInstance = new QRCode(box, {
+                    text: text,
+                    width: 180,
+                    height: 180,
+                    colorDark: '#1a237e',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.Q
+                });
+            } catch (err) {
+                onQRError(text, err);
+                return;
+            }
+
+            send('fingerPrint', 'qr_generated', 'success', encryptDeviceId(text));
+
+            setStatus('Código QR generado correctamente.', true);
+            el.logo.classList.add('success');
+            console.log('Código QR generado correctamente:', text);
+
+            startQRWatchdog(box, text);
+        }
+
+        // Verifica cada 30 s que el QR siga visible; si desapareció, lo regenera
+        function startQRWatchdog(box, text) {
+            qrWatchdogTimer = setInterval(function () {
+                if (!deviceId || !isOnline) return;
+                if (!isQRVisible(box)) {
+                    console.log('QR no visible, regenerando...');
+                    generateQRCode(text);
+                }
+            }, QR_WATCHDOG_MS);
+        }
+
+        function isQRVisible(box) {
+            if (!document.body.contains(box)) return false;
+            var img = box.querySelector('img');
+            if (img && img.style.display !== 'none' && img.complete && img.naturalWidth > 0) return true;
+            var canvas = box.querySelector('canvas');
+            if (canvas && canvas.style.display !== 'none' && canvas.width > 0) {
+                var ctx = canvas.getContext('2d');
+                // El primer píxel es colorLight (blanco opaco); alfa 0 = canvas borrado
+                return !ctx || ctx.getImageData(0, 0, 1, 1).data[3] !== 0;
+            }
+            return false;
+        }
+
+        function onQRError(text, err) {
+            console.error('Error generando QR:', err);
+            el.qrWrapper.innerHTML = '<div class="qr-error">Error QR</div>';
+            send('fingerPrint', 'qr_error', 'failed', '');
+
+            clearTimeout(qrRetryTimer);
+            qrRetryTimer = setTimeout(function () {
+                if (deviceId === text && isOnline) generateQRCode(text);
+            }, QR_RETRY_MS);
+        }
+
+        // ---------------- Solicitud de ID ----------------
+        function requestDeviceId() {
+            if (!isOnline) {
+                console.log('No se puede solicitar ID: sin conexión a internet');
+                return;
+            }
+            setDeviceText('Solicitando ID del dispositivo...', false);
+            setStatus('Esperando identificación del dispositivo...', false);
+            send('fingerPrint', 'info', '');
+        }
+
+        // ---------------- Conexión ----------------
+        // Comprueba que el contenido recibido sea realmente el esperado del servidor de internet.
+        function validateResponse(type, text) {
+            try {
+                var data = JSON.parse(text);
+                if (type === 'dns') {
+                    return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+                }
+                if (type === 'ip') {
+                    return !!data && typeof data.ip === 'string' && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+                }
+            } catch (e) { /* respuesta no JSON = no es internet real */ }
+            return false;
+        }
+
+        // Prueba un endpoint: true solo si respondió 200 Y el contenido es el esperado.
+        function pingEndpoint(ep, timeoutMs) {
+            return new Promise(function (resolve) {
+                var done = false;
+                var xhr = null;
+                var timer = setTimeout(function () { finish(false); }, timeoutMs);
+
+                function finish(ok) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    if (!ok && xhr) {
+                        try { xhr.abort(); } catch (e) { /* ignorar */ }
+                    }
+                    resolve(ok);
+                }
+
+                try {
+                    var sep = ep.url.indexOf('?') === -1 ? '?' : '&';
+                    // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+                    var pad = Math.random().toString(36).slice(2, 12);
+                    xhr = new XMLHttpRequest();
+                    xhr.open('GET', ep.url + sep + 'random_padding=' + pad, true);
+                    xhr.timeout = timeoutMs;
+                    if (ep.type === 'dns') xhr.setRequestHeader('Accept', 'application/dns-json');
+                    xhr.onload = function () {
+                        finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+                    };
+                    xhr.onerror = function () { finish(false); };
+                    xhr.ontimeout = function () { finish(false); };
+                    xhr.onabort = function () { finish(false); };
+                    xhr.send();
+                } catch (e) {
+                    finish(false);
+                }
+            });
+        }
+
+        // Prueba todos los endpoints en paralelo; basta con que uno sea válido.
+        function probeInternet() {
+            var eps = CONNECTION_CONFIG.endpoints;
+            return new Promise(function (resolve) {
+                var pending = eps.length;
+                var resolved = false;
+                if (!pending) {
+                    resolve(false);
+                    return;
+                }
+                eps.forEach(function (ep) {
+                    pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+                        if (resolved) return;
+                        if (ok) {
+                            resolved = true;
+                            resolve(true);
+                        } else if (--pending === 0) {
+                            resolved = true;
+                            resolve(false);
+                        }
+                    });
+                });
+            });
+        }
+
+        function handleOfflineStatus() {
+            console.log('Estado: OFFLINE');
+            isOnline = false;
+            internetStatus = 'offline';
+            stopQRTimers();
+
+            clearInterval(offlineTimer);
+            sendConnectionStatus();
+            offlineTimer = setInterval(sendConnectionStatus, OFFLINE_SIGNAL_MS);
+
+            updateUIForOfflineMode();
+        }
+
+        function handleOnlineStatus() {
+            console.log('Estado: ONLINE');
+            var wasOffline = internetStatus === 'offline';
+            isOnline = true;
+            internetStatus = 'online';
+            clearInterval(offlineTimer);
+            offlineTimer = null;
+
+            sendConnectionStatus();
+            // Al arrancar el ID ya se pidió; solo se vuelve a pedir al recuperar la conexión
+            // o si todavía no hay ID.
+            if (wasOffline || !deviceId) requestDeviceId();
+        }
+
+        function setOnline(online) {
+            var next = online ? 'online' : 'offline';
+            if (next === internetStatus) return;
+            if (online) handleOnlineStatus();
+            else handleOfflineStatus();
+        }
+
+        // Histéresis: un fallo aislado no declara "offline"; un éxito sí declara "online".
+        function applyResult(ok, immediate) {
+            if (ok) {
+                failures = 0;
+                setOnline(true);
+            } else {
+                failures++;
+                if (immediate || internetStatus !== 'online' ||
+                    failures >= CONNECTION_CONFIG.failuresToOffline) {
+                    setOnline(false);
+                }
+            }
+        }
+
+        function scheduleNextCheck() {
+            var delay;
+            if (internetStatus === 'online') {
+                delay = failures > 0 ? CONNECTION_CONFIG.retryIntervalMs : CONNECTION_CONFIG.onlineIntervalMs;
+            } else {
+                delay = CONNECTION_CONFIG.offlineIntervalMs;
+            }
+            clearTimeout(checkTimer);
+            checkTimer = setTimeout(function () { runCheck(false); }, delay);
+        }
+
+        // Ejecuta una verificación real (sin solapes). Devuelve Promise<boolean>.
+        // forceReport = true: el resultado se aplica sin histéresis y siempre se reporta.
+        function runCheck(forceReport) {
+            if (currentCheck) {
+                if (forceReport) {
+                    return currentCheck.then(function (online) {
+                        sendConnectionStatus();
+                        return online;
+                    });
+                }
+                return currentCheck;
+            }
+
+            clearTimeout(checkTimer);
+
+            // Sin red local (Wi-Fi/cable desconectado) no hace falta consultar servidores
+            if (!navigator.onLine) {
+                lastLatency = 0;
+                var before = internetStatus;
+                applyResult(false, true);
+                if (forceReport && before === internetStatus) sendConnectionStatus();
+                scheduleNextCheck();
+                return Promise.resolve(false);
+            }
+
+            var started = Date.now();
+            currentCheck = probeInternet().then(function (ok) {
+                currentCheck = null;
+                lastLatency = Date.now() - started;
+                var before = internetStatus;
+                applyResult(ok, !!forceReport);
+                // Si el estado cambió ya se reportó; si no, se reporta aquí
+                if (forceReport && before === internetStatus) sendConnectionStatus();
+                scheduleNextCheck();
+                return internetStatus === 'online';
+            });
+            return currentCheck;
+        }
+
+        function startConnectionMonitoring() {
+            // Los eventos del navegador solo disparan una verificación real
+            window.addEventListener('online', function () { runCheck(false); });
+            window.addEventListener('offline', function () { runCheck(false); });
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) runCheck(false);
+            });
+            if (navigator.connection && navigator.connection.addEventListener) {
+                navigator.connection.addEventListener('change', function () { runCheck(false); });
+            }
+            runCheck(false);
+        }
+
+        // ---------------- Iconos flotantes (solo animación CSS, sin timers JS) ----------------
+        function createFloatingIcons() {
+            // Iconos SVG inline (trazos de 24x24): código de barras, QR, credencial,
+            // llave, huella, usuario verificado, candado
+            var iconPaths = [
+                '<path d="M3 5v14M6 5v14M10 5v14M13 5v14M17 5v14M21 5v14M8 5v14M19 5v14" stroke-width="1.5"/>',
+                '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M18 18h3v3"/>',
+                '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16a3 3 0 0 1 6 0M14 10h5M14 14h4"/>',
+                '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2M17 6l3 3M14 9l2 2"/>',
+                '<path d="M12 11v4M8 7.5a5 5 0 0 1 8 4V14M6 11a6 6 0 0 1 .5-2.5M5 16a12 12 0 0 0 1-5M18 12v1a12 12 0 0 1-1 5M9 21a9 9 0 0 0 2-7v-3a1 1 0 0 1 2 0"/>',
+                '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
+                '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+            ];
+            var animations = ['float', 'float2', 'float3'];
+            var frag = document.createDocumentFragment();
+            var wrapper = document.createElement('div');
+
+            for (var i = 0; i < FLOATING_ICON_COUNT; i++) {
+                wrapper.innerHTML = '<svg class="floating-icon icon-' + ((i % 6) + 1) +
+                    '" viewBox="0 0 24 24">' + iconPaths[i % iconPaths.length] + '</svg>';
+                var icon = wrapper.firstChild;
+
+                var anim = animations[Math.floor(Math.random() * animations.length)];
+                var duration = 18 + Math.random() * 25;
+                // Retraso negativo: cada icono arranca en un punto distinto de su recorrido
+                var delay = -Math.random() * duration;
+
+                icon.style.left = (Math.random() * 95) + '%';
+                icon.style.top = (Math.random() * 95) + '%';
+                icon.style.opacity = (0.3 + Math.random() * 0.4).toFixed(2);
+                icon.style.animation = anim + ' ' + duration.toFixed(1) + 's ease-in-out ' +
+                    delay.toFixed(1) + 's infinite';
+
+                frag.appendChild(icon);
+            }
+            document.getElementById('floating-icons-container').appendChild(frag);
+        }
+
+        // ---------------- Orientación y escala (igual que connections1.html) ----------------
+        var LAYOUT_CONFIG = {
+            allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
+            defaultOrientation: 0,  // rotación inicial
+            defaultScale: 100,      // tamaño inicial en porcentaje
+            minScale: 10,           // porcentaje mínimo aceptado
+            maxScale: 300           // porcentaje máximo aceptado
+        };
+
+        // Cómo funciona la rotación:
+        //  - #stage se gira con CSS transform alrededor de su esquina superior
+        //    izquierda y luego se desplaza (translate) para volver a cubrir la pantalla.
+        //  - Con 90° y 270° el escenario "se acuesta": ancho y alto se intercambian.
+        //  - #scaler escala el contenido desde su centro.
+        var layoutManager = {
+            stage: null,
+            scaler: null,
+            orientation: LAYOUT_CONFIG.defaultOrientation,
+            scale: LAYOUT_CONFIG.defaultScale,
+
+            init: function () {
+                var self = this;
+                this._ensureElements();
+                this.apply();
+                var reapply = function () { self.apply(); };
+                window.addEventListener('resize', reapply);
+                window.addEventListener('orientationchange', reapply);
+            },
+
+            _ensureElements: function () {
+                if (!this.stage) this.stage = document.getElementById('stage');
+                if (!this.scaler) this.scaler = document.getElementById('scaler');
+                return !!(this.stage && this.scaler);
+            },
+
+            // Acepta números o textos numéricos. 360 = 0 y los negativos se
+            // normalizan (-90 equivale a 270). Devuelve true si cambió.
+            setOrientation: function (value) {
+                if (value === undefined || value === null) return false;
+                var degrees = parseInt(value, 10);
+                if (isNaN(degrees)) return false;
+                degrees = ((degrees % 360) + 360) % 360;
+                if (LAYOUT_CONFIG.allowedOrientations.indexOf(degrees) === -1) return false;
+                this.orientation = degrees;
+                return true;
+            },
+
+            // Porcentaje limitado entre minScale y maxScale. Devuelve true si cambió.
+            setScale: function (value) {
+                if (value === undefined || value === null) return false;
+                var percent = parseFloat(value);
+                if (!isFinite(percent) || percent <= 0) return false;
+                this.scale = Math.min(LAYOUT_CONFIG.maxScale, Math.max(LAYOUT_CONFIG.minScale, percent));
+                return true;
+            },
+
+            // Aplica al HTML la orientación y el tamaño actuales.
+            apply: function () {
+                if (!this._ensureElements()) return;
+
+                var width = window.innerWidth || document.documentElement.clientWidth;
+                var height = window.innerHeight || document.documentElement.clientHeight;
+
+                var stageWidth = width;
+                var stageHeight = height;
+                var transform = 'none';
+
+                if (this.orientation === 90) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(' + width + 'px, 0px) rotate(90deg)';
+                } else if (this.orientation === 180) {
+                    transform = 'translate(' + width + 'px, ' + height + 'px) rotate(180deg)';
+                } else if (this.orientation === 270) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(0px, ' + height + 'px) rotate(270deg)';
+                }
+
+                this.stage.style.width = stageWidth + 'px';
+                this.stage.style.height = stageHeight + 'px';
+                this._setTransform(this.stage, transform, '0 0');
+                this._setTransform(this.scaler, 'scale(' + this.scale / 100 + ')', '50% 50%');
+            },
+
+            _setTransform: function (element, value, origin) {
+                element.style.webkitTransformOrigin = origin;
+                element.style.transformOrigin = origin;
+                element.style.webkitTransform = value;
+                element.style.transform = value;
+            }
+        };
+
+        // ---------------- Anti-quemado de pantalla ----------------
+        var dimTimer = null;
+
+        // "Pixel shift": mueve todo el bloque central unos píxeles cada minuto para que
+        // el QR, los textos y los bordes no queden fijos siempre en los mismos píxeles.
+        // Se usa left/top (no transform) para no tocar las capas de GPU que contienen el QR.
+        function startPixelShift() {
+            var box = document.querySelector('.device-id-container');
+            setInterval(function () {
+                var r = PIXEL_SHIFT_RANGE;
+                box.style.left = Math.round(Math.random() * 2 * r - r) + 'px';
+                box.style.top = Math.round(Math.random() * 2 * r - r) + 'px';
+            }, PIXEL_SHIFT_MS);
+        }
+
+        // Rotación lenta del color de acento (sitio web), igual que connections1.html
+        function startAccentShift() {
+            var colorStep = 0;
+            setInterval(function () {
+                colorStep = (colorStep + 15) % 360;
+                document.documentElement.style.setProperty(
+                    '--accent', 'hsl(' + ((187 + colorStep) % 360) + ', 100%, 38%)');
+            }, ACCENT_SHIFT_MS);
+        }
+
+        // Atenúa la pantalla tras un tiempo sin actividad; se reactiva con el control
+        // remoto, un toque, o cuando Kodular envía datos nuevos.
+        function wakeScreen() {
+            document.body.classList.remove('dimmed');
+            clearTimeout(dimTimer);
+            dimTimer = setTimeout(function () {
+                document.body.classList.add('dimmed');
+            }, DIM_AFTER_MS);
+        }
+
+        function startDimming() {
+            ['keydown', 'touchstart', 'mousedown'].forEach(function (evt) {
+                window.addEventListener(evt, wakeScreen, { passive: true });
+            });
+            wakeScreen();
+        }
+
+        // ---------------- API pública (llamada desde Kodular con RunJavaScript) ----------------
+        window.wakeScreen = wakeScreen;
+
+        window.setCode = function (id) {
+            if (!isOnline) {
+                console.log('Recibido ID pero estamos offline, ignorando...');
+                return;
+            }
+
+            id = (id === null || id === undefined) ? '' : String(id).trim();
+            if (!id) {
+                console.error('ID vacío recibido. Re-solicitando...');
+                send('fingerPrint', 'id_empty', 'error');
+                setTimeout(requestDeviceId, EMPTY_ID_RETRY_MS);
+                return;
+            }
+
+            deviceId = id;
+            console.log('ID del dispositivo recibido:', deviceId);
+            wakeScreen();
+            setDeviceText(deviceId, false);
+            showQRLoading();
+            generateQRCode(deviceId);
+        };
+
+        window.updateData = function (jsonData) {
+            try {
+                var data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+                if (!data) return;
+                console.log('updateData recibido:', data);
+
+                // Rotación y tamaño (opcionales): orientation 0/90/180/270, scale 10-300
+                layoutManager.setOrientation(data.orientation);
+                layoutManager.setScale(data.scale);
+                layoutManager.apply();
+
+                if (data.url) el.website.textContent = data.url;
+                if (data.version) el.version.textContent = 'Versión: ' + data.version;
+                if (data.email) el.email.textContent = data.email;
+
+                if (data.id) window.setCode(data.id);
+                else if (data.deviceId) window.setCode(data.deviceId);
+            } catch (e) {
+                console.error('Error al procesar updateData:', e);
+            }
+        };
+
+        window.refreshQR = function () {
+            if (deviceId && isOnline) {
+                console.log('Refrescando código QR...');
+                generateQRCode(deviceId);
+            }
+        };
+
+        window.requestIdAgain = function () {
+            if (isOnline) {
+                deviceId = null;
+                stopQRTimers();
+                showQRLoading();
+                el.logo.classList.remove('success');
+                requestDeviceId();
+            }
+        };
+
+        window.simulateOffline = handleOfflineStatus;
+        window.simulateOnline = handleOnlineStatus;
+
+        // Fuerza una verificación real y envía el resultado a la app.
+        // Devuelve el último estado conocido ('online' | 'offline' | 'unknown').
+        window.checkConnection = function () {
+            runCheck(true);
+            return internetStatus;
+        };
+
+        // Versión asíncrona: Promise<boolean> con el resultado real.
+        window.checkConnectionAsync = function () {
+            return runCheck(true);
+        };
+
+        // ---------------- Inicio ----------------
+        function init() {
+            el.deviceId = document.getElementById('device-id');
+            el.status = document.getElementById('connection-status');
+            el.qrWrapper = document.getElementById('qr-wrapper');
+            el.logo = document.getElementById('logo');
+            el.website = document.getElementById('websiteUrl');
+            el.version = document.getElementById('versionText');
+            el.email = document.getElementById('emailContact');
+
+            console.log('Generador de ID de dispositivo cargado.');
+
+            // Aplica la orientación y escala iniciales (después cambian con updateData)
+            layoutManager.init();
+
+            // Precargar la librería QR mientras se espera el ID
+            loadQRLib().catch(function (e) { console.log(e.message); });
+
+            createFloatingIcons();
+            startPixelShift();
+            startAccentShift();
+            startDimming();
+            startConnectionMonitoring();
+            requestDeviceId();
+
+            window.addEventListener('beforeunload', function () {
+                stopQRTimers();
+                clearInterval(offlineTimer);
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+    </script>
+</body>
+</html>

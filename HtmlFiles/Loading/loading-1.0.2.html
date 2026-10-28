@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA DE CARGA (SPLASH) PARA ANDROID WEBVIEW
+=====================================================================
+
+  QUE HACE
+  Muestra una animación de carga (logo flotante, barra de progreso y
+  4 pasos). Mientras corre la animación comprueba si hay internet y,
+  al terminar, avisa a la app (Kodular / App Inventor) con un JSON.
+
+  COMPATIBILIDAD
+  Pensado para Android WebView 101 (Chromium 101). Usa clases ES2015,
+  const/let y fetch (todo soportado). No usa campos privados (#x) ni
+  librerías externas. El CSS lleva prefijos -webkit- por seguridad.
+
+  FLUJO GENERAL
+  1. La página carga y SplashScreen.init() espera hasta 5 segundos
+     a que la app llame a updateData(...).
+  2. Si updateData llega a tiempo => se muestran los datos y la
+     animación arranca de inmediato.
+     Si NO llega en 5 s => la animación arranca igual, sin datos.
+  3. Durante la animación se comprueba internet (al inicio y al 60%).
+  4. Al llegar al 100% se envía el JSON a la app, se hace un fundido
+     de salida y se muestra "Bienvenido".
+
+  CONTRATO DE ENTRADA: updateData(json)
+  La app llama: updateData('{"version":"3.0.12", ... }')
+  También acepta un objeto JavaScript. Todos los campos son OPCIONALES:
+
+    version      texto    Se muestra como "Versión: <valor>"
+    url          texto    Se muestra tal cual (ej. smartpizarra.com)
+    email        texto    Se muestra tal cual
+    id           texto    Se muestra como "Id: <valor>"
+    orientation  número   Rotación del contenido: 0, 90, 180 o 270
+                          (360 equivale a 0). Sentido horario.
+    scale        número   Tamaño en porcentaje (10 a 300). 100 = normal.
+
+  Un campo que no llega, o llega vacío o inválido, simplemente se
+  ignora: el texto queda oculto y la rotación/tamaño no cambian.
+
+  CONTRATO DE SALIDA: mensaje enviado a la app
+    {"origin":"loadingPage","action":"loading","status":"true",
+     "internet":"online"}
+
+  "internet" NO es fijo: vale "online" u "offline" según la
+  comprobación real hecha durante la animación.
+
+  ARQUITECTURA (clases del bloque <script>)
+    CONFIG           Todos los valores ajustables (tiempos, URLs...).
+    AppBridge        Envía mensajes a Kodular / App Inventor.
+    InternetChecker  Comprueba si hay internet real.
+    LayoutManager    Rota (orientation) y escala (scale) el contenido.
+    InfoPanel        Muestra version / url / email / id.
+    LoadingAnimation Barra, textos y pasos de la animación.
+    SplashScreen     Orquesta todo lo anterior (clase principal).
+
+  COMO MODIFICAR (guía rápida)
+    Cambiar duración, espera de datos o servidores de prueba
+      => editar el objeto CONFIG.
+    Cambiar textos de la barra
+      => CONFIG.animation.progressTexts.
+    Cambiar colores, tamaños o animaciones visuales
+      => bloque <style> (cada sección está comentada).
+    Cambiar el mensaje que se envía a la app
+      => AppBridge.notifyLoadingFinished().
+    Agregar un nuevo dato al JSON de entrada
+      => 1) un <div class="info" id="..."> en el HTML,
+         2) su id en CONFIG.ids,
+         3) una línea en InfoPanel.show().
+=====================================================================
+-->
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <!-- Sin zoom: en un WebView la pantalla de carga debe verse siempre igual -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cargando...</title>
+
+    <style>
+        /* ==============================================================
+           1. BASE: reinicio de estilos y fondo de pantalla completa
+           ============================================================== */
+
+        /* Quita márgenes por defecto y hace que el padding cuente dentro del ancho */
+        * {
+            margin: 0;
+            padding: 0;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent; /* sin resaltado azul al tocar */
+        }
+
+        /* html y body ocupan toda la pantalla. Se usa height:100% y no 100vh
+           porque en WebView "vh" puede fallar cuando cambia la barra del sistema */
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #002B4F;
+        }
+
+        body {
+            position: relative;
+            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
+            color: #ffffff;
+            -webkit-user-select: none;   /* evita seleccionar texto por accidente */
+            user-select: none;
+        }
+
+        /* ==============================================================
+           2. ESCENARIO Y ESCALADOR (rotación y tamaño)
+           Los dimensiona y transforma LayoutManager desde JavaScript.
+           ============================================================== */
+
+        /* #stage: se rota 0/90/180/270 grados. Su ancho y alto los fija el
+           JS (se intercambian cuando se rota 90 o 270) */
+        #stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+        }
+
+        /* #scaler: recibe el porcentaje de tamaño (scale). Escala desde su centro */
+        #scaler {
+            width: 100%;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+        }
+
+        /* ==============================================================
+           3. TARJETA DE CARGA (todo el contenido del splash)
+           ============================================================== */
+
+        .splash-container {
+            text-align: center;
+            max-width: 100%;
+            width: 400px;
+            padding: 0 20px;
+        }
+
+        /* --- Logo con movimiento flotante --- */
+        .logo {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 30px;
+            border-radius: 20px;
+            background: #2196f3; /* color de respaldo si el degradado falla */
+            background: -webkit-linear-gradient(45deg, #2196f3, #21cbf3);
+            background: linear-gradient(45deg, #2196f3, #21cbf3);
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+            -webkit-box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+            box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+            -webkit-animation: float 3s ease-in-out infinite;
+            animation: float 3s ease-in-out infinite;
+            will-change: transform;   /* pide aceleración por GPU */
+        }
+
+        .logo-icon { font-size: 48px; font-weight: bold; }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 5px;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        /* --- Datos que llegan por updateData() (InfoPanel) --- */
+
+        /* Si un campo no recibió datos queda vacío y no ocupa espacio */
+        .info:empty { display: none; }
+
+        .subtitle {                       /* versión */
+            font-size: 1.2rem;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 8px;
+        }
+
+        .website {                        /* url */
+            font-size: 1.1rem;
+            color: #00e5ff;
+            margin-bottom: 8px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .email-contact {                  /* email */
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+        }
+
+        .system-id {                      /* id (puede ser largo: se parte en líneas) */
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 8px;
+            word-wrap: break-word;
+            word-break: break-all;
+        }
+
+        /* --- Barra de progreso --- */
+        .loading-container {              /* riel gris de la barra */
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 22px;
+            margin-bottom: 20px;
+        }
+
+        .loading-bar {                    /* parte coloreada; el JS cambia su width de 0% a 100% */
+            height: 100%;
+            width: 0%;
+            background: #00e5ff;
+            background: -webkit-linear-gradient(left, #00e5ff, #2979ff);
+            background: linear-gradient(90deg, #00e5ff, #2979ff);
+            border-radius: 2px;
+            -webkit-transition: width 0.3s ease;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {                  /* texto bajo la barra */
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 10px;
+        }
+
+        /* --- Lista de pasos --- */
+        .loading-steps {
+            margin-top: 30px;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+        }
+
+        .step {                           /* paso apagado (aún no alcanzado) */
+            margin: 10px 0;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+            opacity: 0.5;
+            -webkit-transition: opacity 0.3s ease;
+            transition: opacity 0.3s ease;
+        }
+
+        .step.active { opacity: 1; color: #00e5ff; }   /* paso alcanzado */
+
+        .step-check { margin-right: 10px; font-size: 1.2rem; }
+
+        /* --- Puntos "..." del último paso ---
+           Son 3 <span> que parpadean con opacity, uno tras otro.
+           (No se anima la propiedad "content" porque en WebView no es fiable) */
+        .dots span {
+            opacity: 0;
+            -webkit-animation: dotBlink 1.5s linear infinite;
+            animation: dotBlink 1.5s linear infinite;
+        }
+        .dots span:nth-child(2) { -webkit-animation-delay: 0.25s; animation-delay: 0.25s; }
+        .dots span:nth-child(3) { -webkit-animation-delay: 0.5s;  animation-delay: 0.5s; }
+
+        /* Cuando la animación termina (clase "done") los puntos se detienen y se ocultan */
+        .done .dots span {
+            -webkit-animation: none;
+            animation: none;
+            opacity: 0;
+        }
+
+        /* ==============================================================
+           4. PANTALLA FINAL DE BIENVENIDA (oculta hasta que termina todo)
+           ============================================================== */
+        .welcome {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .welcome h2 { margin-bottom: 10px; }
+        .welcome p { color: #00e5ff; }
+
+        /* ==============================================================
+           5. ANIMACIONES (@keyframes). Cada una con y sin prefijo -webkit-
+           ============================================================== */
+
+        /* Logo: sube y baja 15px */
+        @-webkit-keyframes float {
+            0%, 100% { -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
+            50%      { -webkit-transform: translate3d(0, -15px, 0); transform: translate3d(0, -15px, 0); }
+        }
+        @keyframes float {
+            0%, 100% { -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
+            50%      { -webkit-transform: translate3d(0, -15px, 0); transform: translate3d(0, -15px, 0); }
+        }
+
+        /* Puntos: aparecen y desaparecen */
+        @-webkit-keyframes dotBlink {
+            0%, 100% { opacity: 0; }
+            20%, 80% { opacity: 1; }
+        }
+        @keyframes dotBlink {
+            0%, 100% { opacity: 0; }
+            20%, 80% { opacity: 1; }
+        }
+
+        /* Salida: la tarjeta se desvanece */
+        @-webkit-keyframes fadeOut {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+
+        /* Clase que el JS agrega a la tarjeta para iniciar el desvanecimiento
+           (su duración debe coincidir con CONFIG.fadeOutMs) */
+        .fade-out {
+            -webkit-animation: fadeOut 0.5s ease forwards;
+            animation: fadeOut 0.5s ease forwards;
+        }
+
+        /* Accesibilidad: si el sistema pide menos movimiento, el logo no flota */
+        @media (prefers-reduced-motion: reduce) {
+            .logo { -webkit-animation: none; animation: none; }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- #stage  => se rota según "orientation"
+         #scaler => se escala según "scale"
+         Dentro van la tarjeta de carga y la pantalla de bienvenida -->
+    <div id="stage"><div id="scaler">
+
+        <!-- TARJETA DE CARGA -->
+        <div class="splash-container" id="splashContainer">
+            <div class="logo">
+                <div class="logo-icon">SP</div>
+            </div>
+            <h1>Smart Pizarra</h1>
+
+            <!-- Los 4 campos siguientes los llena InfoPanel con los datos de updateData().
+                 Si no llegan datos quedan vacíos y el CSS (.info:empty) los oculta -->
+            <div class="info subtitle" id="versionText"></div>
+            <div class="info website" id="websiteUrl"></div>
+            <div class="info email-contact" id="emailContact"></div>
+            <div class="info system-id" id="systemId"></div>
+
+            <!-- Barra de progreso: LoadingAnimation cambia el ancho de #loadingBar -->
+            <div class="loading-container">
+                <div class="loading-bar" id="loadingBar"></div>
+            </div>
+            <div class="progress-text" id="progressText">Starting system...</div>
+
+            <!-- Pasos: LoadingAnimation les agrega/quita la clase "active".
+                 Si agregas o quitas pasos, ajusta CONFIG.animation.totalSteps
+                 y mantén los ids consecutivos: step1, step2, step3... -->
+            <div class="loading-steps" id="loadingSteps">
+                <div class="step active" id="step1"><span class="step-check">&#10003;</span> Loading configuration...</div>
+                <div class="step" id="step2"><span class="step-check">&#10003;</span> Initializing modules...</div>
+                <div class="step" id="step3"><span class="step-check">&#10003;</span> Preparing interface...</div>
+                <div class="step" id="step4"><span class="step-check">&#10003;</span> Loading complete<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+
+        <!-- PANTALLA DE BIENVENIDA: oculta (display:none) hasta que termina la animación -->
+        <div class="welcome" id="welcome">
+            <h2>¡Bienvenido a Smart Pizarra!</h2>
+            <p>smartpizarra.com</p>
+        </div>
+
+    </div></div>
+
+    <script>
+    (function () {
+        'use strict';
+
+        /* ==================================================================
+           CONFIG - TODOS LOS VALORES AJUSTABLES EN UN SOLO LUGAR
+           Si necesitas cambiar un tiempo, una URL o un id, hazlo aquí y no
+           dentro de las clases. (Object.freeze evita cambios accidentales
+           en el nivel principal; no modifiques CONFIG mientras la app corre.)
+           ================================================================== */
+        const CONFIG = Object.freeze({
+
+            /** Tiempo máximo (ms) que se espera a que la app llame a updateData(). */
+            dataWaitMs: 5000,
+
+            /** Duración (ms) del desvanecimiento final. Debe coincidir con .fade-out en el CSS. */
+            fadeOutMs: 500,
+
+            /** Ajustes de la animación de carga. */
+            animation: {
+                durationMs: 8000,            // duración total de la animación
+                tickMs: 50,                  // cada cuántos ms se actualiza la barra
+                totalSteps: 4,               // cantidad de pasos (#step1 ... #step4)
+                recheckInternetAtPercent: 60, // % en el que se repite la comprobación de internet
+                /** Texto bajo la barra: se usa el primero cuyo "below" sea mayor al porcentaje actual. */
+                progressTexts: [
+                    { below: 25,       text: 'Starting system...' },
+                    { below: 50,       text: 'Loading modules...' },
+                    { below: 75,       text: 'Preparing interface...' },
+                    { below: Infinity, text: 'Completing setup...' }
+                ]
+            },
+
+            /** Ajustes de rotación y tamaño del contenido. */
+            layout: {
+                allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
+                defaultOrientation: 0,
+                defaultScale: 100,           // porcentaje inicial
+                minScale: 10,                // porcentaje mínimo aceptado
+                maxScale: 300                // porcentaje máximo aceptado
+            },
+
+            /** Ajustes de la comprobación de internet. */
+            internet: {
+                /** Basta con que responda UNA de estas URLs para considerar "online". */
+                urls: [
+                    'https://www.gstatic.com/generate_204',
+                    'https://www.cloudflare.com/cdn-cgi/trace'
+                ],
+                requestTimeoutMs: 4000,      // tiempo máximo de espera por cada URL
+                readyTimeoutMs: 3000         // espera máxima por el resultado al terminar la animación
+            },
+
+            /** Valores fijos del mensaje que se envía a la app al terminar. */
+            message: {
+                origin: 'loadingPage',
+                action: 'loading',
+                status: 'true'
+            },
+
+            /** Ids de los elementos HTML que usa el script. */
+            ids: {
+                stage: 'stage',
+                scaler: 'scaler',
+                splashContainer: 'splashContainer',
+                welcome: 'welcome',
+                loadingBar: 'loadingBar',
+                progressText: 'progressText',
+                loadingSteps: 'loadingSteps',
+                stepPrefix: 'step',          // los pasos son step1, step2, ...
+                versionText: 'versionText',
+                websiteUrl: 'websiteUrl',
+                emailContact: 'emailContact',
+                systemId: 'systemId'
+            },
+
+            /** Nombres de las clases CSS que el script agrega o quita. */
+            cssClasses: {
+                active: 'active',            // paso alcanzado
+                done: 'done',                // animación terminada (detiene los puntos)
+                fadeOut: 'fade-out'          // inicia el desvanecimiento
+            }
+        });
+
+        /** Posibles resultados de la comprobación de internet (también se envían a la app). */
+        const INTERNET = Object.freeze({
+            ONLINE: 'online',
+            OFFLINE: 'offline'
+        });
+
+        /* ==================================================================
+           UTILIDAD
+           ================================================================== */
+
+        /**
+         * Busca un elemento por id y falla con un mensaje claro si no existe.
+         * Así, si alguien borra un id del HTML, el error indica cuál falta.
+         * @param {string} id
+         * @returns {HTMLElement}
+         */
+        function requireElement(id) {
+            const element = document.getElementById(id);
+            if (!element) {
+                throw new Error('Splash: no se encontró el elemento HTML con id "' + id + '"');
+            }
+            return element;
+        }
+
+        /* ==================================================================
+           CLASE AppBridge
+           Responsabilidad: comunicarse con la app Kodular / App Inventor.
+           ================================================================== */
+        class AppBridge {
+            /**
+             * @param {{origin:string, action:string, status:string}} messageSettings
+             *        Valores fijos del mensaje de salida (CONFIG.message).
+             */
+            constructor(messageSettings) {
+                this.messageSettings = messageSettings;
+            }
+
+            /**
+             * Envía un texto a la app probando 4 métodos, del más específico al
+             * más general. Se usa el primero que esté disponible.
+             * @param {string} message Texto a enviar (normalmente un JSON).
+             */
+            send(message) {
+                // Método 1: AppInventor específico
+                if (typeof window.AppInventor !== 'undefined') {
+                    window.AppInventor.setWebViewString(message);
+                }
+                // Método 2: Android (versiones más nuevas)
+                else if (window.android && window.android.onReceiveValue) {
+                    window.android.onReceiveValue(message);
+                }
+                // Método 3: Interface estándar
+                else if (window.androidInterface) {
+                    window.androidInterface.onReceiveValue(message);
+                }
+                // Método 4: PostMessage para WebView
+                else {
+                    try {
+                        window.postMessage(message, '*');
+                    } catch (e) {
+                        console.log('PostMessage falló:', e);
+                    }
+                }
+                console.log('Enviado a AppInventor:', message);
+            }
+
+            /**
+             * Avisa a la app que la carga terminó e informa el estado de internet.
+             * Para cambiar el contenido del mensaje de salida, edítalo aquí.
+             * @param {string} internetStatus 'online' u 'offline' (ver INTERNET).
+             */
+            notifyLoadingFinished(internetStatus) {
+                this.send(JSON.stringify({
+                    origin: this.messageSettings.origin,
+                    action: this.messageSettings.action,
+                    status: this.messageSettings.status,
+                    internet: internetStatus   // dato dinámico: viene de la comprobación real
+                }));
+            }
+        }
+
+        /* ==================================================================
+           CLASE InternetChecker
+           Responsabilidad: saber si hay internet REAL.
+           navigator.onLine solo indica si hay una red (por ejemplo WiFi
+           sin salida a internet daría "true"), por eso se hace una petición
+           de prueba a servidores livianos.
+           ================================================================== */
+        class InternetChecker {
+            /**
+             * @param {{urls:string[], requestTimeoutMs:number, readyTimeoutMs:number}} settings
+             *        Ajustes de internet (CONFIG.internet).
+             */
+            constructor(settings) {
+                this.settings = settings;
+                /** Último resultado: 'online' | 'offline' | null (aún sin resultado). */
+                this.status = null;
+                /** true mientras hay una comprobación en curso. */
+                this.checking = false;
+                /** Funciones que esperan el resultado de la comprobación en curso. */
+                this._waiting = [];
+            }
+
+            /**
+             * Inicia una comprobación. Si ya hay una en curso, no hace nada.
+             * Resultado "online" si responde cualquiera de las URLs;
+             * "offline" si fallan todas (o si el sistema ya reporta sin red).
+             */
+            check() {
+                if (this.checking) { return; }
+                this.checking = true;
+
+                const urls = this.settings.urls;
+
+                // Sin red según el sistema, o sin URLs configuradas: respuesta inmediata
+                if (navigator.onLine === false) {
+                    this._finish(INTERNET.OFFLINE);
+                    return;
+                }
+                if (urls.length === 0) {
+                    this._finish(INTERNET.ONLINE);
+                    return;
+                }
+
+                let remaining = urls.length;   // URLs que aún no han respondido
+                let resolved = false;          // true cuando ya se decidió el resultado
+
+                urls.forEach((url) => {
+                    this._ping(url, (ok) => {
+                        if (resolved) { return; }
+                        if (ok) {
+                            resolved = true;
+                            this._finish(INTERNET.ONLINE);
+                        } else {
+                            remaining--;
+                            if (remaining === 0) {
+                                resolved = true;
+                                this._finish(INTERNET.OFFLINE);
+                            }
+                        }
+                    });
+                });
+            }
+
+            /**
+             * Entrega el resultado de internet a la función recibida.
+             * - Si no hay comprobación en curso: responde de inmediato.
+             * - Si la hay: espera el resultado, pero como máximo readyTimeoutMs;
+             *   pasado ese tiempo usa el último resultado conocido.
+             * @param {function(string):void} callback Recibe 'online' u 'offline'.
+             */
+            whenReady(callback) {
+                if (!this.checking) {
+                    callback(this._fallbackStatus());
+                    return;
+                }
+
+                let called = false;
+                const once = (status) => {   // garantiza que callback se llame una sola vez
+                    if (called) { return; }
+                    called = true;
+                    callback(status);
+                };
+
+                this._waiting.push(once);
+                setTimeout(() => once(this._fallbackStatus()), this.settings.readyTimeoutMs);
+            }
+
+            /**
+             * Hace UNA petición de prueba a una URL.
+             * Usa mode:'no-cors' porque solo importa si el servidor respondió,
+             * no leer su contenido. Evita problemas de CORS en el WebView.
+             * @param {string} url
+             * @param {function(boolean):void} done Recibe true si respondió, false si falló o venció el tiempo.
+             * @private
+             */
+            _ping(url, done) {
+                let finished = false;
+                let timer = null;
+
+                const end = (ok) => {        // termina una sola vez (respuesta o tiempo agotado)
+                    if (finished) { return; }
+                    finished = true;
+                    clearTimeout(timer);
+                    done(ok);
+                };
+
+                timer = setTimeout(() => end(false), this.settings.requestTimeoutMs);
+
+                // WebView muy antiguo sin fetch: nos fiamos de navigator.onLine
+                if (!window.fetch) {
+                    end(navigator.onLine !== false);
+                    return;
+                }
+
+                // El parámetro "t" evita que la respuesta salga de la caché
+                const separator = (url.indexOf('?') === -1) ? '?' : '&';
+                fetch(url + separator + 't=' + Date.now(), {
+                    method: 'GET',
+                    mode: 'no-cors',
+                    cache: 'no-store'
+                }).then(() => end(true))
+                  .catch(() => end(false));
+            }
+
+            /**
+             * Guarda el resultado y avisa a quienes lo esperaban.
+             * @param {string} status 'online' u 'offline'.
+             * @private
+             */
+            _finish(status) {
+                this.status = status;
+                this.checking = false;
+                const waiting = this._waiting;
+                this._waiting = [];
+                waiting.forEach((fn) => fn(status));
+            }
+
+            /**
+             * Resultado a usar cuando no hay uno reciente: el último conocido
+             * o, si nunca hubo, lo que indique navigator.onLine.
+             * @returns {string}
+             * @private
+             */
+            _fallbackStatus() {
+                return this.status || (navigator.onLine === false ? INTERNET.OFFLINE : INTERNET.ONLINE);
+            }
+        }
+
+        /* ==================================================================
+           CLASE LayoutManager
+           Responsabilidad: rotar (orientation) y escalar (scale) el contenido.
+
+           Cómo funciona la rotación:
+             - #stage se gira con CSS transform alrededor de su esquina
+               superior izquierda y luego se desplaza (translate) para que
+               vuelva a cubrir la pantalla.
+             - Con 90° y 270° el escenario "se acuesta", por eso su ancho y
+               alto se intercambian respecto a la pantalla.
+             - #scaler escala el contenido desde su centro.
+           ================================================================== */
+        class LayoutManager {
+            /**
+             * @param {HTMLElement} stageElement  Elemento #stage (rotación).
+             * @param {HTMLElement} scalerElement Elemento #scaler (tamaño).
+             * @param {object} settings           Ajustes de layout (CONFIG.layout).
+             */
+            constructor(stageElement, scalerElement, settings) {
+                this.stage = stageElement;
+                this.scaler = scalerElement;
+                this.settings = settings;
+                /** Rotación actual en grados: 0, 90, 180 o 270. */
+                this.orientation = settings.defaultOrientation;
+                /** Tamaño actual en porcentaje. */
+                this.scale = settings.defaultScale;
+            }
+
+            /**
+             * Cambia la orientación si el valor es válido; si no, la deja igual.
+             * Acepta números o textos numéricos. 360 se trata como 0 y los
+             * negativos se normalizan (-90 equivale a 270).
+             * @param {number|string} value Grados.
+             * @returns {boolean} true si se cambió la orientación.
+             */
+            setOrientation(value) {
+                if (value === undefined || value === null) { return false; }
+
+                let degrees = parseInt(value, 10);
+                if (isNaN(degrees)) { return false; }
+
+                degrees = ((degrees % 360) + 360) % 360;   // lleva cualquier valor al rango 0-359
+                if (this.settings.allowedOrientations.indexOf(degrees) === -1) { return false; }
+
+                this.orientation = degrees;
+                return true;
+            }
+
+            /**
+             * Cambia el tamaño si el valor es válido; si no, lo deja igual.
+             * El valor se limita entre minScale y maxScale.
+             * @param {number|string} value Porcentaje (100 = tamaño normal).
+             * @returns {boolean} true si se cambió el tamaño.
+             */
+            setScale(value) {
+                if (value === undefined || value === null) { return false; }
+
+                const percent = parseFloat(value);
+                if (!isFinite(percent) || percent <= 0) { return false; }
+
+                this.scale = Math.min(this.settings.maxScale, Math.max(this.settings.minScale, percent));
+                return true;
+            }
+
+            /**
+             * Aplica al HTML la orientación y el tamaño actuales.
+             * Se llama al iniciar, al cambiar las opciones y cuando cambia
+             * el tamaño de la ventana.
+             */
+            apply() {
+                const width = window.innerWidth || document.documentElement.clientWidth;
+                const height = window.innerHeight || document.documentElement.clientHeight;
+
+                let stageWidth = width;
+                let stageHeight = height;
+                let transform = 'none';
+
+                // Para cada giro: medidas del escenario y desplazamiento que lo devuelve a la pantalla
+                if (this.orientation === 90) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(' + width + 'px, 0px) rotate(90deg)';
+                } else if (this.orientation === 180) {
+                    transform = 'translate(' + width + 'px, ' + height + 'px) rotate(180deg)';
+                } else if (this.orientation === 270) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(0px, ' + height + 'px) rotate(270deg)';
+                }
+
+                this.stage.style.width = stageWidth + 'px';
+                this.stage.style.height = stageHeight + 'px';
+                this._setTransform(this.stage, transform, '0 0');
+                this._setTransform(this.scaler, 'scale(' + (this.scale / 100) + ')', '50% 50%');
+            }
+
+            /**
+             * Recalcula el layout cuando la ventana cambia de tamaño o el
+             * dispositivo gira físicamente.
+             */
+            listenToWindowChanges() {
+                const reapply = () => this.apply();
+                window.addEventListener('resize', reapply);
+                window.addEventListener('orientationchange', reapply);
+            }
+
+            /**
+             * Asigna una transformación CSS con y sin prefijo -webkit-.
+             * @param {HTMLElement} element
+             * @param {string} value   Valor de transform (ej. 'rotate(90deg)').
+             * @param {string} origin  Valor de transform-origin (ej. '0 0').
+             * @private
+             */
+            _setTransform(element, value, origin) {
+                element.style.webkitTransformOrigin = origin;
+                element.style.transformOrigin = origin;
+                element.style.webkitTransform = value;
+                element.style.transform = value;
+            }
+        }
+
+        /* ==================================================================
+           CLASE InfoPanel
+           Responsabilidad: mostrar version, url, email e id.
+           Un dato que no llega no se escribe, y el CSS oculta el campo vacío.
+           ================================================================== */
+        class InfoPanel {
+            /**
+             * @param {object} elements Elementos HTML de cada dato.
+             * @param {HTMLElement} elements.version
+             * @param {HTMLElement} elements.url
+             * @param {HTMLElement} elements.email
+             * @param {HTMLElement} elements.id
+             */
+            constructor(elements) {
+                this.elements = elements;
+            }
+
+            /**
+             * Muestra los datos recibidos. Solo escribe los que traen valor.
+             * @param {{version?:string, url?:string, email?:string, id?:string}} data
+             */
+            show(data) {
+                this._setText(this.elements.version, 'Versión: ', data.version);
+                this._setText(this.elements.url, '', data.url);
+                this._setText(this.elements.email, '', data.email);
+                this._setText(this.elements.id, 'Id: ', data.id);
+            }
+
+            /**
+             * Escribe "prefijo + valor" en un elemento, solo si hay valor.
+             * @param {HTMLElement} element
+             * @param {string} prefix Texto que va antes del valor (puede ser '').
+             * @param {*} value       Valor recibido (undefined, null o '' se ignoran).
+             * @private
+             */
+            _setText(element, prefix, value) {
+                if (value !== undefined && value !== null && String(value) !== '') {
+                    element.textContent = prefix + String(value);
+                }
+            }
+        }
+
+        /* ==================================================================
+           CLASE LoadingAnimation
+           Responsabilidad: la barra de progreso, el texto y los pasos.
+           No sabe nada de internet ni de la app: solo avisa su avance
+           mediante callbacks, lo que facilita modificarla por separado.
+           ================================================================== */
+        class LoadingAnimation {
+            /**
+             * @param {object} elements
+             * @param {HTMLElement} elements.bar       Barra (#loadingBar).
+             * @param {HTMLElement} elements.text      Texto de progreso (#progressText).
+             * @param {HTMLElement} elements.stepsBox  Caja de pasos (#loadingSteps).
+             * @param {HTMLElement[]} elements.steps   Pasos, en orden (step1, step2...).
+             * @param {object} settings Ajustes de animación (CONFIG.animation).
+             * @param {{active:string, done:string}} cssClasses Clases CSS (CONFIG.cssClasses).
+             */
+            constructor(elements, settings, cssClasses) {
+                this.elements = elements;
+                this.settings = settings;
+                this.cssClasses = cssClasses;
+                this._timer = null;
+            }
+
+            /**
+             * Inicia la animación. Cada tickMs actualiza la barra, el texto y
+             * los pasos, y avisa el avance. Al llegar a 100% se detiene.
+             * @param {function(number):void} onProgress Recibe el porcentaje (0 a 100) en cada actualización.
+             * @param {function():void} onComplete       Se llama una vez al llegar a 100%.
+             */
+            start(onProgress, onComplete) {
+                if (this._timer) { return; }   // ya está corriendo
+
+                const startTime = Date.now();
+
+                this._timer = setInterval(() => {
+                    const elapsed = Date.now() - startTime;
+                    const percent = Math.min(100, (elapsed / this.settings.durationMs) * 100);
+
+                    this._render(percent);
+                    onProgress(percent);
+
+                    if (percent >= 100) {
+                        clearInterval(this._timer);
+                        this._timer = null;
+                        onComplete();
+                    }
+                }, this.settings.tickMs);
+            }
+
+            /**
+             * Marca la animación como terminada (detiene los puntos "...").
+             */
+            markAsFinished() {
+                this.elements.stepsBox.classList.add(this.cssClasses.done);
+            }
+
+            /**
+             * Dibuja el estado visual correspondiente a un porcentaje.
+             * @param {number} percent 0 a 100.
+             * @private
+             */
+            _render(percent) {
+                this.elements.bar.style.width = percent + '%';
+                this.elements.text.textContent = this._textFor(percent);
+                this._updateSteps(percent);
+            }
+
+            /**
+             * Elige el texto de progreso según el porcentaje (ver CONFIG.animation.progressTexts).
+             * @param {number} percent
+             * @returns {string}
+             * @private
+             */
+            _textFor(percent) {
+                const texts = this.settings.progressTexts;
+                for (let i = 0; i < texts.length; i++) {
+                    if (percent < texts[i].below) { return texts[i].text; }
+                }
+                return texts[texts.length - 1].text;
+            }
+
+            /**
+             * Enciende los pasos alcanzados y apaga el resto. Con 4 pasos:
+             * paso 1 desde 0%, paso 2 desde 25%, paso 3 desde 50%, paso 4 desde 75%.
+             * @param {number} percent
+             * @private
+             */
+            _updateSteps(percent) {
+                const stepSize = 100 / this.settings.totalSteps;
+                const reached = Math.floor(percent / stepSize) + 1;   // cantidad de pasos encendidos
+
+                this.elements.steps.forEach((step, index) => {
+                    if (index + 1 <= reached) {
+                        step.classList.add(this.cssClasses.active);
+                    } else {
+                        step.classList.remove(this.cssClasses.active);
+                    }
+                });
+            }
+        }
+
+        /* ==================================================================
+           CLASE SplashScreen  (CLASE PRINCIPAL / ORQUESTADOR)
+           Responsabilidad: coordinar todas las demás clases y decidir el
+           orden de los eventos. Aquí está el "guion" completo:
+
+             init()            => aplica layout y espera datos (máx. dataWaitMs)
+             updateData(json)  => muestra datos, aplica opciones, inicia animación
+             _startLoading()   => inicia animación + comprobación de internet
+             _handleProgress() => repite la comprobación de internet al 60%
+             _handleFinished() => espera internet, avisa a la app, fundido y bienvenida
+           ================================================================== */
+        class SplashScreen {
+            /**
+             * Crea todas las piezas a partir de CONFIG y del HTML.
+             * @param {object} config Objeto CONFIG.
+             */
+            constructor(config) {
+                this.config = config;
+                const ids = config.ids;
+
+                // Elementos principales
+                this.container = requireElement(ids.splashContainer);
+                this.welcome = requireElement(ids.welcome);
+
+                // Colaboradores (cada clase con una única responsabilidad)
+                this.bridge = new AppBridge(config.message);
+                this.internet = new InternetChecker(config.internet);
+                this.layout = new LayoutManager(
+                    requireElement(ids.stage),
+                    requireElement(ids.scaler),
+                    config.layout
+                );
+                this.info = new InfoPanel({
+                    version: requireElement(ids.versionText),
+                    url: requireElement(ids.websiteUrl),
+                    email: requireElement(ids.emailContact),
+                    id: requireElement(ids.systemId)
+                });
+                this.animation = new LoadingAnimation(
+                    {
+                        bar: requireElement(ids.loadingBar),
+                        text: requireElement(ids.progressText),
+                        stepsBox: requireElement(ids.loadingSteps),
+                        steps: this._findSteps(config.animation.totalSteps, ids.stepPrefix)
+                    },
+                    config.animation,
+                    config.cssClasses
+                );
+
+                /** true cuando la animación ya arrancó (evita iniciarla dos veces). */
+                this.started = false;
+                /** Temporizador de la espera de datos. */
+                this._waitTimer = null;
+                /** true cuando ya se hizo la segunda comprobación de internet. */
+                this._rechecked = false;
+            }
+
+            /**
+             * Arranca la pantalla: aplica el layout inicial y espera los datos.
+             * Si en dataWaitMs no llega updateData(), inicia igualmente.
+             */
+            init() {
+                this.layout.apply();
+                this.layout.listenToWindowChanges();
+                this._waitTimer = setTimeout(() => this._startLoading(), this.config.dataWaitMs);
+            }
+
+            /**
+             * Punto de entrada de los datos. La app lo llama mediante la función
+             * global updateData(...).
+             * Si el JSON es inválido se ignora y se sigue esperando (el temporizador
+             * de init() hará que la animación inicie igual).
+             * @param {string|object} jsonData Texto JSON u objeto con los datos.
+             */
+            updateData(jsonData) {
+                let data;
+                try {
+                    data = (typeof jsonData === 'string') ? JSON.parse(jsonData) : jsonData;
+                } catch (e) {
+                    console.log('updateData: JSON inválido', e);
+                    return;
+                }
+                if (!data || typeof data !== 'object') { return; }
+
+                // 1) Mostrar los textos que llegaron
+                this.info.show(data);
+
+                // 2) Aplicar rotación y tamaño si vinieron
+                this.layout.setOrientation(data.orientation);
+                this.layout.setScale(data.scale);
+                this.layout.apply();
+
+                // 3) Ya hay datos: iniciar la animación sin esperar más
+                this._startLoading();
+            }
+
+            /**
+             * Inicia la animación y la comprobación de internet (una sola vez).
+             * @private
+             */
+            _startLoading() {
+                if (this.started) { return; }
+                this.started = true;
+
+                if (this._waitTimer) {
+                    clearTimeout(this._waitTimer);
+                    this._waitTimer = null;
+                }
+
+                this.internet.check();   // primera comprobación, mientras corre la animación
+
+                this.animation.start(
+                    (percent) => this._handleProgress(percent),
+                    () => this._handleFinished()
+                );
+            }
+
+            /**
+             * Se ejecuta en cada avance de la animación. Al llegar al porcentaje
+             * configurado repite la comprobación de internet para tener un dato
+             * más reciente al terminar.
+             * @param {number} percent
+             * @private
+             */
+            _handleProgress(percent) {
+                if (!this._rechecked && percent >= this.config.animation.recheckInternetAtPercent) {
+                    this._rechecked = true;
+                    this.internet.check();
+                }
+            }
+
+            /**
+             * Se ejecuta al llegar la animación a 100%: obtiene el estado de
+             * internet, avisa a la app y muestra la pantalla de bienvenida.
+             * @private
+             */
+            _handleFinished() {
+                this.animation.markAsFinished();
+
+                this.internet.whenReady((status) => {
+                    this.bridge.notifyLoadingFinished(status);
+                    this._fadeOutAndShowWelcome();
+                });
+            }
+
+            /**
+             * Desvanece la tarjeta de carga y luego muestra la bienvenida.
+             * @private
+             */
+            _fadeOutAndShowWelcome() {
+                this.container.classList.add(this.config.cssClasses.fadeOut);
+
+                setTimeout(() => {
+                    this.container.style.display = 'none';
+                    this.welcome.style.display = 'block';
+                }, this.config.fadeOutMs);
+            }
+
+            /**
+             * Busca los pasos #step1, #step2... y los devuelve en orden.
+             * @param {number} total   Cantidad de pasos.
+             * @param {string} prefix  Prefijo del id (ej. 'step').
+             * @returns {HTMLElement[]}
+             * @private
+             */
+            _findSteps(total, prefix) {
+                const steps = [];
+                for (let i = 1; i <= total; i++) {
+                    steps.push(requireElement(prefix + i));
+                }
+                return steps;
+            }
+        }
+
+        /* ==================================================================
+           ARRANQUE
+           Crea la pantalla, expone updateData() a la app y la inicia cuando
+           el HTML esté listo.
+           ================================================================== */
+        const splash = new SplashScreen(CONFIG);
+
+        /**
+         * Función GLOBAL que llama la app (Kodular / App Inventor):
+         *   updateData('{"version":"3.0.12","url":"...","email":"...","id":"...",
+         *               "orientation":90,"scale":120}')
+         * @param {string|object} jsonData
+         */
+        window.updateData = function (jsonData) {
+            splash.updateData(jsonData);
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function () { splash.init(); });
+        } else {
+            splash.init();
+        }
+    })();
+    </script>
+</body>
+</html>

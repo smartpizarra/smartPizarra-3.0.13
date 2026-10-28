@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA DE IDENTIFICACIÓN (ID + CÓDIGO QR)
+  PARA ANDROID WEBVIEW
+=====================================================================
+
+  QUE HACE
+  Muestra el ID único del dispositivo y un código QR con ese ID, para
+  que otro equipo lo escanee y vincule la TV box. La página:
+    - Pide el ID a la app (Kodular / App Inventor) al arrancar.
+    - Cuando la app responde con el ID, dibuja el QR y le devuelve un
+      token codificado.
+    - Vigila la conexión a internet; sin internet muestra un aviso y
+      lo informa a la app cada 2 segundos.
+    - Vigila que el QR siga visible (algunas GPU de TV box lo borran)
+      y lo vuelve a dibujar si desaparece.
+    - Protege la pantalla contra el quemado (burn-in) porque puede
+      quedarse visible durante horas.
+
+  COMPATIBILIDAD / RENDIMIENTO (Android WebView 101 en TV box)
+  - JavaScript ES5 (var / function) + Promise: funciona en cualquier WebView.
+  - Iconos SVG escritos en el propio archivo (sin Font Awesome).
+  - Única dependencia externa: la librería del QR (qrcode.js). Se busca
+    primero una copia local "qrcode.min.js" junto a este HTML y, si no
+    existe, se descarga del CDN.
+  - IMPORTANTE: el contenedor del QR y sus "padres" NO se animan con
+    transform. Animarlos hacía que el canvas del QR se borrara o
+    parpadeara en las GPU de las TV box.
+  - Sin backdrop-filter ni filter: drop-shadow (muy pesados en GPU).
+
+  FLUJO GENERAL
+  1. init(): guarda referencias a los elementos, aplica orientación y
+     escala, precarga la librería QR, crea los iconos flotantes, arranca
+     el anti-quemado y la vigilancia de internet.
+  2. Se envía a la app {"origin":"fingerPrint","action":"info"} para
+     pedir el ID del dispositivo.
+  3. La app responde llamando a updateData({"id":"..."}) o setCode("...").
+  4. Se muestra el ID, se dibuja el QR y se envía "qr_generated" con el token.
+  5. Mientras tanto se verifica internet periódicamente:
+       - Al perderlo: aviso en pantalla y mensaje "offline" cada 2 s.
+       - Al recuperarlo: mensaje "online" y se vuelve a pedir el ID.
+
+  CONTRATO DE ENTRADA
+    updateData(json)   La app llama: updateData('{"id":"ABC123", ... }')
+                       También acepta un objeto. Todos los campos OPCIONALES:
+        id / deviceId  texto    ID del dispositivo (genera el QR)
+        version        texto    Se muestra como "Versión: <valor>"
+        url            texto    Se muestra tal cual
+        email          texto    Se muestra tal cual
+        scale          número   Tamaño en porcentaje (10 a 300). 100 = normal
+
+    setCode(id)        Atajo: recibe solo el ID (texto).
+
+  ORIENTACIÓN (NO se recibe por parámetro)
+  La orientación se elige y se guarda en config.html. Esta página la
+  lee al abrirse del almacenamiento local del WebView (localStorage,
+  clave "smartpizarra.orientation"). Si nunca se guardó ninguna, usa
+  0° (LAYOUT_CONFIG.defaultOrientation). Si llega "orientation" por
+  updateData, se ignora.
+
+  CONTRATO DE SALIDA: mensajes enviados a la app
+  Todos llevan "internetStatus": "online" | "offline" ("" mientras la
+  primera verificación no ha terminado).
+
+    Pedir el ID:
+      {"origin":"fingerPrint","action":"info","status":"","internetStatus":"online"}
+    QR generado (token = ID codificado, ver encryptDeviceId):
+      {"origin":"fingerPrint","action":"qr_generated","status":"success",
+       "internetStatus":"online","token":"WVhCdz..."}
+    Error al generar el QR (se reintenta solo cada 5 s):
+      {"origin":"fingerPrint","action":"qr_error","status":"failed",
+       "internetStatus":"online","token":""}
+    Llegó un ID vacío (se vuelve a pedir a los 2 s):
+      {"origin":"fingerPrint","action":"id_empty","status":"error","internetStatus":"online"}
+    Cambio de conexión (y cada 2 s mientras no hay internet):
+      {"origin":"loading","action":"connection","status":"offline",
+       "internetStatus":"offline","latency":0,"localNetwork":true,
+       "checkedAt":"2026-10-26T17:41:11.909Z"}
+
+  FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
+    updateData(json)        Ver "contrato de entrada".
+    setCode(id)             Muestra el ID y genera su QR.
+    refreshQR()             Vuelve a dibujar el QR del ID actual.
+    requestIdAgain()        Borra el ID actual y lo pide de nuevo a la app.
+    checkConnection()       Fuerza una verificación de internet y envía el
+                            resultado. Devuelve el último estado conocido.
+    checkConnectionAsync()  Igual, pero devuelve Promise<boolean>.
+    wakeScreen()            Quita la atenuación de pantalla (anti-quemado).
+    simulateOffline()       Pruebas: fuerza el modo "sin internet".
+    simulateOnline()        Pruebas: fuerza el modo "con internet".
+
+  ARQUITECTURA (bloque <script>, en este orden)
+    1. Configuración        URLs, tiempos y límites (todo ajustable).
+    2. Estado               Variables que cambian mientras corre la página.
+    3. Comunicación         sendToAppInventor(), send(), sendConnectionStatus().
+    4. Token                encryptDeviceId(): codifica el ID para la app.
+    5. Librería QR          loadQRLib(): carga qrcode.js (local o CDN).
+    6. UI                   Textos de estado y del ID.
+    7. Código QR            Dibujar, vigilar y reintentar el QR.
+    8. Solicitud de ID      requestDeviceId().
+    9. Conexión             Verificación de internet con histéresis.
+   10. Iconos flotantes     createFloatingIcons().
+   11. Orientación/escala   layoutManager (igual que connection.html).
+   12. Anti-quemado         Desplazamiento, color de acento y atenuación.
+   13. API pública          Funciones window.* para la app.
+   14. Inicio               init().
+
+  COMO MODIFICAR (guía rápida)
+    Tiempos de verificación de internet o servidores de prueba
+      => CONNECTION_CONFIG (sección 1).
+    Cada cuánto se avisa "offline", se vigila el QR o se reintenta
+      => OFFLINE_SIGNAL_MS, QR_WATCHDOG_MS, QR_RETRY_MS (sección 1).
+    Protección anti-quemado
+      => PIXEL_SHIFT_*, DIM_AFTER_MS, ACCENT_SHIFT_MS (sección 1) y
+         la opacidad de "body.dimmed #dim-overlay" en el CSS.
+    Colores o tamaño del QR
+      => renderQR() (colorDark, colorLight, width, height).
+    Formato del token
+      => encryptDeviceId(). ¡Cuidado! la app que lee el QR/token debe
+         decodificarlo con el mismo formato.
+    Textos que ve el usuario
+      => requestDeviceId(), renderQR(), updateUIForOfflineMode().
+    Iconos flotantes
+      => iconPaths dentro de createFloatingIcons() (SVG de 24x24).
+    Colores, tamaños o animaciones visuales
+      => bloque <style> (cada sección está numerada y comentada).
+
+  COMO PROBAR EN UN NAVEGADOR DE PC
+    Abrir el archivo en Chrome, abrir la consola (F12) y escribir:
+      window.AppInventor = { setWebViewString: function (m) { console.log(m); } };
+      updateData({ id: "ABC123", version: "3.0.12", scale: 70 });
+    Para probar sin internet: simulateOffline() / simulateOnline(), o
+    desactivar la red en DevTools (pestaña Network -> "Offline").
+    Para probar otra orientación: guardarla en config.html (mismo
+    navegador) o en la consola:
+      localStorage.setItem("smartpizarra.orientation", "90")
+    y recargar la página.
+
+  ARCHIVOS RELACIONADOS
+    config.html       Pantalla donde se elige y guarda la orientación.
+    loading.html      Pantalla de carga.
+    connection.html   Pantalla "sin conexión" (mismo método de verificación,
+                      mismo layout y mismo estilo de iconos).
+=====================================================================
+-->
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Pizarra</title>
+    <!-- Sin Font Awesome: los iconos son SVG integrados (sin descargas, funcionan sin internet) -->
+    <!-- preconnect: abre la conexión con el CDN antes de pedir qrcode.js (carga más rápida) -->
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <style>
+        /* ==============================================================
+           1. BASE: reinicio de estilos, colores globales y fondo
+           ============================================================== */
+
+        /* Quita márgenes por defecto y hace que el padding cuente dentro del ancho */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --accent: hsl(187, 100%, 38%); /* color del sitio web (rota despacio: anti-quemado) */
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a237e;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a237e 0%, #311b92 100%);
+            color: white;
+            position: relative;
+        }
+
+        /* ==============================================================
+           2. ESCENARIO Y ESCALADOR (rotación y tamaño)
+           Los dimensiona y transforma layoutManager desde JavaScript.
+           ============================================================== */
+
+        /* #stage: se rota 0/90/180/270. Su ancho y alto los fija el JS
+           (se intercambian al rotar 90 o 270) */
+        #stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1;
+        }
+
+        /* #scaler: recibe el porcentaje de tamaño (scale), escala desde su centro */
+        #scaler {
+            position: relative;
+            z-index: 20;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+
+        /* ==============================================================
+           3. FONDO ANIMADO Y ANIMACIÓN DE TEXTOS
+           ============================================================== */
+
+        /* Variación de color de fondo: capa con opacidad animada (solo composición, sin repintar) */
+        body::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, hsl(220, 70%, 15%) 0%, hsl(260, 65%, 18%) 100%);
+            opacity: 0;
+            animation: bgShift 40s ease-in-out infinite alternate;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes bgShift {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+
+        /* Animación ligera compartida por los textos (se mueven 1-2 px) */
+        @keyframes drift {
+            0% { transform: translate(0, 0); }
+            25% { transform: translate(2px, 1px); }
+            50% { transform: translate(-1px, 2px); }
+            75% { transform: translate(1px, -1px); }
+            100% { transform: translate(-2px, -2px); }
+        }
+
+        /* ==============================================================
+           4. TARJETA PRINCIPAL (logo, título y datos de la app)
+           ============================================================== */
+
+        /*
+         * IMPORTANTE: el contenedor principal, .device-info y .qr-container NO se animan.
+         * Animar transform en los ancestros del QR es lo que hacía que el canvas
+         * se borrara / parpadeara en las GPU de las TV box.
+         * (El desplazamiento anti-quemado de esta tarjeta usa left/top, no transform.)
+         */
+        .device-id-container {
+            text-align: center;
+            max-width: 90%;
+            width: 500px;
+            z-index: 20;
+            position: relative;
+            background: rgba(30, 40, 100, 0.85);
+            padding: 40px 30px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(100, 150, 255, 0.3);
+        }
+
+        /* Logo "SP": naranja mientras espera; verde (clase .success) con el QR listo */
+        .logo {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 25px;
+            border-radius: 20px;
+            background: linear-gradient(45deg, #ff9800, #ff5722);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(255, 152, 0, 0.4);
+            animation: pulse 2s ease-in-out infinite alternate;
+        }
+
+        .logo.success {
+            background: linear-gradient(45deg, #4CAF50, #8BC34A);
+        }
+
+        /* Logo: late suavemente */
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.1); opacity: 1; }
+        }
+
+        .logo-icon {
+            font-size: 40px;
+            font-weight: bold;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 5px;
+            text-shadow: 0 2px 15px rgba(0, 0, 0, 0.4);
+            color: #e8eaf6; /* blanco suavizado: menos desgaste que #fff fijo */
+            animation: drift 9s ease-in-out infinite alternate;
+        }
+
+        /* --- Datos que llegan por updateData() --- */
+        /* Versión, sitio web y email: mismo aspecto que connection.html */
+        .version {                        /* "Versión: x.y.z" */
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 10px;
+            font-style: italic;
+        }
+
+        .website {                        /* url (su color rota: --accent) */
+            font-size: 1.2rem;
+            color: var(--accent);
+            margin-bottom: 10px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .email-contact {                  /* email */
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+
+        /* ==============================================================
+           5. BLOQUE DEL DISPOSITIVO: ID, código QR y estado
+           ============================================================== */
+
+        /* Caja que agrupa ID + QR + estado (NO animar: contiene el QR) */
+        .device-info {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 25px 0;
+            border: 1px solid rgba(100, 150, 255, 0.3);
+        }
+
+        /* Texto con el ID del dispositivo (o el aviso "Sin conexión") */
+        .device-id-display {
+            font-size: 1.8rem;
+            font-family: 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            word-break: break-all;      /* los ID largos se parten en varias líneas */
+            color: #4FC3F7;
+            border: 2px solid rgba(79, 195, 247, 0.3);
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: drift 7s ease-in-out infinite alternate;
+        }
+
+        /* Sin internet: el texto se pone naranja */
+        .device-id-display.offline {
+            color: #ff9800;
+        }
+
+        /* Marco del QR (NO animar: contiene el QR) */
+        .qr-container {
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Cuadro blanco donde se dibuja el QR */
+        #qr-code {
+            width: 200px;
+            height: 200px;
+            margin: 0 auto;
+            background: white;
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Contenedor que el JS vacía y rellena (spinner, QR o "Error QR") */
+        .qr-wrapper {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+        }
+
+        /* Caja creada por renderQR() donde qrcode.js dibuja */
+        .qr-box {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* qrcode.js genera <canvas> + <img>; se escalan al tamaño del recuadro */
+        .qr-box canvas,
+        .qr-box img {
+            max-width: 100%;
+            height: auto;
+            image-rendering: pixelated;   /* bordes nítidos al escalar (mejor lectura) */
+        }
+
+        .qr-error {
+            color: #f44336;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Spinner en CSS puro: no depende de Font Awesome */
+        .loading-qr {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 6px solid rgba(255, 152, 0, 0.25);
+            border-top-color: #ff9800;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* ==============================================================
+           6. INSTRUCCIONES, MENSAJE DE ESTADO Y PIE DE PÁGINA
+           ============================================================== */
+        .instructions {
+            margin-top: 25px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 15px;
+            text-align: left;
+            font-size: 1rem;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.8);
+            animation: drift 10s ease-in-out infinite alternate;
+        }
+
+        .instruction-item {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Icono SVG de cada instrucción: solo trazo (stroke), sin relleno */
+        .instruction-icon {
+            margin-right: 12px;
+            width: 22px;
+            height: 22px;
+            min-width: 22px;
+            stroke: #4fc3f7;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* Mensaje de estado bajo el QR: naranja = esperando; verde (.success) = QR listo */
+        .status-message {
+            font-size: 1.2rem;
+            color: #ff9800;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(255, 152, 0, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 152, 0, 0.3);
+            animation: statusPulse 3s ease-in-out infinite alternate;
+        }
+
+        .status-message.success {
+            color: #4CAF50;
+            background: rgba(76, 175, 80, 0.1);
+            border-color: rgba(76, 175, 80, 0.3);
+        }
+
+        @keyframes statusPulse {
+            0% { opacity: 0.7; transform: scale(0.98); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .contact-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            font-size: 0.9em;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* ==============================================================
+           7. PROTECCIÓN ANTI-QUEMADO (burn-in)
+           ============================================================== */
+
+        /* Capa negra que atenúa la pantalla en reposo (solo cambia opacity: barato en GPU) */
+        #dim-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            opacity: 0;
+            transition: opacity 4s ease-in-out;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        /* El JS agrega la clase "dimmed" al body tras DIM_AFTER_MS sin actividad */
+        body.dimmed #dim-overlay {
+            opacity: 0.45;
+        }
+
+        /* En reposo se detienen los pulsos del logo/estado: menos trabajo y menos brillo fijo */
+        body.dimmed .logo,
+        body.dimmed .status-message {
+            animation-play-state: paused;
+        }
+
+        /* ==============================================================
+           8. ICONOS FLOTANTES DE FONDO
+           Los crea createFloatingIcons() con los dibujos de iconPaths.
+           ============================================================== */
+        #floating-icons-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Iconos flotantes: SVG integrados (sin Font Awesome ni filtros de sombra).
+           La opacidad de cada icono la fija el JS (0.3 a 0.7) */
+        .floating-icon {
+            position: absolute;
+            width: 34px;
+            height: 34px;
+            will-change: transform;   /* capa propia en GPU: moverlo no repinta el resto */
+            stroke: currentColor;     /* el color lo da la clase .icon-N */
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* Paleta de los iconos (el JS asigna icon-1 ... icon-6 en orden) */
+        .icon-1 { color: #4CAF50; }
+        .icon-2 { color: #8BC34A; }
+        .icon-3 { color: #66ff99; }
+        .icon-4 { color: #66ffff; }
+        .icon-5 { color: #4FC3F7; }
+        .icon-6 { color: #6699ff; }
+
+        /* float, float2, float3: tres recorridos distintos (el JS elige uno al azar) */
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(20px, 30px) rotate(5deg); }
+            50% { transform: translate(-15px, 20px) rotate(-5deg); }
+            75% { transform: translate(10px, -10px) rotate(3deg); }
+        }
+
+        @keyframes float2 {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(30px, -20px) rotate(-8deg); }
+            66% { transform: translate(-20px, 25px) rotate(8deg); }
+        }
+
+        @keyframes float3 {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            20% { transform: translate(-25px, 15px) rotate(-3deg); }
+            40% { transform: translate(20px, -25px) rotate(3deg); }
+            60% { transform: translate(-15px, -20px) rotate(-5deg); }
+            80% { transform: translate(25px, 10px) rotate(5deg); }
+        }
+
+        /* ==============================================================
+           9. TAMAÑOS SEGÚN EL ANCHO DE PANTALLA
+           ============================================================== */
+
+        /* Pantallas grandes (TV 1080p o más) */
+        @media (min-width: 1200px) {
+            .device-id-container {
+                width: 600px;
+                padding: 50px 40px;
+            }
+
+            h1 { font-size: 3rem; }
+            .version { font-size: 1.3rem; }
+            .website { font-size: 1.4rem; }
+            .email-contact { font-size: 1.2rem; }
+            .device-id-display { font-size: 2rem; }
+            #qr-code { width: 220px; height: 220px; }
+        }
+
+        /* Pantallas medianas */
+        @media (max-width: 768px) {
+            .device-id-container { padding: 30px 20px; }
+
+            h1 { font-size: 2.2rem; }
+            .version { font-size: 0.9rem; }
+            .website { font-size: 1rem; }
+            .email-contact { font-size: 0.9rem; }
+            .device-id-display { font-size: 1.4rem; min-height: 70px; }
+            #qr-code { width: 180px; height: 180px; }
+            .logo { width: 80px; height: 80px; }
+            .logo-icon { font-size: 32px; }
+        }
+
+        /* Pantallas pequeñas */
+        @media (max-width: 480px) {
+            h1 { font-size: 1.8rem; }
+            .device-id-display { font-size: 1.2rem; min-height: 60px; }
+            #qr-code { width: 150px; height: 150px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- #stage  => se rota según la orientación guardada en config.html
+         #scaler => se escala según "scale" -->
+    <div id="stage">
+    <!-- Iconos flotantes (rotan con el escenario, pero no se escalan) -->
+    <div id="floating-icons-container"></div>
+    <div id="scaler">
+
+    <!-- TARJETA PRINCIPAL -->
+    <div class="device-id-container">
+        <!-- Logo: el JS le agrega la clase "success" (verde) cuando el QR está listo -->
+        <div class="logo" id="logo">
+            <div class="logo-icon">SP</div>
+        </div>
+
+        <h1>Smart Pizarra</h1>
+
+        <!-- Valores por defecto; updateData() los reemplaza -->
+        <div class="version" id="versionText">Versión: 3.0.1</div>
+        <div class="website" id="websiteUrl">smartpizarra.com</div>
+        <div class="email-contact" id="emailContact">smartpizarra@gmail.com</div>
+
+        <div class="device-info">
+            <!-- ID del dispositivo (lo escribe setDeviceText) -->
+            <div class="device-id-display" id="device-id">Solicitando ID del dispositivo...</div>
+
+            <!-- Código QR: #qr-wrapper muestra el spinner, el QR o "Error QR" -->
+            <div class="qr-container">
+                <div id="qr-code">
+                    <div class="qr-wrapper" id="qr-wrapper">
+                        <div class="loading-qr"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mensaje de estado (lo escribe setStatus) -->
+            <div class="status-message" id="connection-status">
+                Esperando identificación del dispositivo...
+            </div>
+        </div>
+
+        <!-- Instrucciones para el usuario. Cada icono es un SVG de 24x24 dibujado con trazos. -->
+        <div class="instructions">
+            <div class="instruction-item">
+                <!-- Icono: información -->
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" /><path d="M12 16v-5M12 8h.01" />
+                </svg>
+                <span>Identificación única de tu dispositivo.</span>
+            </div>
+
+            <div class="instruction-item">
+                <!-- Icono: sincronizar -->
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M21 3v6h-6M3 21v-6h6" />
+                </svg>
+                <span>La aplicación solicita el ID automáticamente.</span>
+            </div>
+
+            <div class="instruction-item">
+                <!-- Icono: teléfono móvil -->
+                <svg class="instruction-icon" viewBox="0 0 24 24">
+                    <rect x="6" y="2" width="12" height="20" rx="2" /><path d="M11 18h2" />
+                </svg>
+                <span>La aplicación generará un código QR automáticamente.</span>
+            </div>
+        </div>
+
+        <div class="contact-info">
+            © 2026 Smart Pizarra. Todos los derechos reservados.
+        </div>
+    </div>
+
+    </div><!-- /#scaler -->
+    </div><!-- /#stage -->
+
+    <!-- Atenuación anti-quemado: fuera del escenario para cubrir siempre toda la pantalla -->
+    <div id="dim-overlay"></div>
+
+    <script>
+    // Todo el código va dentro de una función (IIFE) para no crear variables
+    // globales por accidente. Lo que la app necesita se publica en window.*
+    (function () {
+        'use strict';
+
+        /* ==================================================================
+           1. CONFIGURACIÓN (valores ajustables)
+           ================================================================== */
+
+        // Primero intenta una copia local (ponga qrcode.min.js junto a este HTML en los assets
+        // de Kodular para que funcione aunque la TV box arranque sin internet) y luego el CDN.
+        var QR_LIB_URLS = [
+            'qrcode.min.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'
+        ];
+        // Verificación de internet (mismo método que connection.html)
+        var CONNECTION_CONFIG = {
+            // Cada endpoint responde con un JSON conocido (con CORS) que se LEE y se VALIDA.
+            // Así un portal cautivo, el router o un DNS local que respondan con su propia
+            // página NO cuentan como internet. Los endpoints con IP (1.1.1.1 / 8.8.8.8)
+            // no dependen del DNS local. Con que UNO sea válido, hay internet.
+            endpoints: [
+                { url: 'https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://8.8.8.8/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://dns.google/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://api.ipify.org/?format=json', type: 'ip' }
+            ],
+            timeoutMs: 5000,          // tiempo máximo de espera por verificación
+            onlineIntervalMs: 10000,  // frecuencia de verificación cuando hay internet
+            offlineIntervalMs: 5000,  // frecuencia de verificación cuando no hay internet
+            retryIntervalMs: 3000,    // reintento rápido tras un fallo estando online
+            failuresToOffline: 2      // fallos seguidos para declarar "offline" (evita falsos cortes)
+        };
+        var OFFLINE_SIGNAL_MS = 2000;     // sin internet: cada cuánto se repite el aviso "offline" a la app
+        var QR_WATCHDOG_MS = 30000;       // cada cuánto se comprueba que el QR siga visible
+        var QR_RETRY_MS = 5000;           // espera antes de reintentar si el QR falló
+        var EMPTY_ID_RETRY_MS = 2000;     // espera antes de volver a pedir el ID si llegó vacío
+        var FLOATING_ICON_COUNT = 12;     // cantidad de iconos flotantes (menos = mejor rendimiento)
+
+        // Anti-quemado de pantalla
+        var PIXEL_SHIFT_MS = 60000;       // cada cuánto se desplaza el contenido
+        var PIXEL_SHIFT_RANGE = 30;       // desplazamiento máximo en px (±), ~21 px reales con zoom 0.7
+        var DIM_AFTER_MS = 5 * 60000;     // atenuar tras 5 min sin actividad
+        var ACCENT_SHIFT_MS = 60000;      // cada cuánto cambia el color del sitio web
+
+        /* ==================================================================
+           2. ESTADO (variables que cambian mientras corre la página)
+           ================================================================== */
+        var deviceId = null;              // ID actual (null = aún no llegó)
+        var isOnline = true;              // false solo cuando se confirmó "offline"
+        var internetStatus = 'unknown';   // 'unknown' | 'online' | 'offline'
+        var currentCheck = null;          // Promise de la verificación en curso
+        var checkTimer = null;            // temporizador de la próxima verificación
+        var failures = 0;                 // fallos de verificación seguidos (histéresis)
+        var lastLatency = 0;              // ms que tardó la última verificación
+        var qrCodeInstance = null;        // objeto QRCode actual (para poder borrarlo)
+        var offlineTimer = null;          // repite el aviso "offline" cada OFFLINE_SIGNAL_MS
+        var qrWatchdogTimer = null;       // vigilancia periódica del QR
+        var qrRetryTimer = null;          // reintento tras un error del QR
+
+        // Referencias DOM cacheadas (evita getElementById repetidos). Se llenan en init().
+        var el = {};
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP (Kodular / App Inventor)
+           ================================================================== */
+
+        /**
+         * Envía un texto a la app probando 4 métodos, del más específico al
+         * más general. Se usa el primero que esté disponible.
+         * En Kodular el bloque "WebViewer.WebViewStringChange" recibe el texto.
+         * @param {string} message Texto a enviar (normalmente un JSON).
+         */
+        function sendToAppInventor(message) {
+            try {
+                if (window.AppInventor && window.AppInventor.setWebViewString) {
+                    window.AppInventor.setWebViewString(message);            // Kodular / App Inventor
+                } else if (window.android && window.android.onReceiveValue) {
+                    window.android.onReceiveValue(message);                   // Android (versiones nuevas)
+                } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+                    window.androidInterface.onReceiveValue(message);          // Interface estándar
+                } else {
+                    window.postMessage(message, '*');                         // Navegador normal (pruebas)
+                }
+            } catch (e) {
+                console.log('Error enviando a AppInventor:', e);
+            }
+            console.log('Enviado a AppInventor:', message);
+        }
+
+        /**
+         * Arma y envía un mensaje estándar de esta pantalla.
+         * Todas las respuestas llevan "internetStatus": "online" | "offline"
+         * ("" mientras la primera verificación aún no termina).
+         * @param {string} origin  Quién envía (normalmente 'fingerPrint').
+         * @param {string} action  Qué pasó ('info', 'qr_generated', 'qr_error', 'id_empty').
+         * @param {string} status  Resultado ('success', 'failed', 'error' o '').
+         * @param {string} [token] Opcional: token del QR.
+         */
+        function send(origin, action, status, token) {
+            var msg = {
+                origin: origin,
+                action: action,
+                status: status,
+                internetStatus: internetStatus === 'unknown' ? '' : internetStatus
+            };
+            if (token !== undefined) msg.token = token;
+            sendToAppInventor(JSON.stringify(msg));
+        }
+
+        /** Envía el estado de la conexión (formato: ver "contrato de salida" al inicio). */
+        function sendConnectionStatus() {
+            sendToAppInventor(JSON.stringify({
+                origin: 'loading',
+                action: 'connection',
+                status: internetStatus,          // igual que internetStatus (compatibilidad)
+                internetStatus: internetStatus,  // estado REAL de internet
+                latency: lastLatency,
+                localNetwork: navigator.onLine,  // true = hay red local (Wi-Fi/cable), aunque no haya internet
+                checkedAt: new Date().toISOString()
+            }));
+        }
+
+        /* ==================================================================
+           4. TOKEN (ID codificado que se envía a la app junto con el QR)
+           ================================================================== */
+
+        /**
+         * Codifica un texto en Base64 admitiendo acentos y otros caracteres UTF-8.
+         * btoa seguro para UTF-8 (para IDs ASCII produce exactamente el mismo resultado que btoa)
+         * @param {string} str
+         * @returns {string}
+         */
+        function b64(str) {
+            return btoa(unescape(encodeURIComponent(str)));
+        }
+
+        /**
+         * Genera el token del ID. NO es cifrado fuerte: es una codificación
+         * Base64 con una marca de tiempo y un valor aleatorio, para que cada
+         * token sea distinto.
+         *   token = Base64( Base64("app") : Base64(id) : timestamp36 : aleatorio6 )
+         * Si cambias este formato, actualiza también a quien lo decodifica.
+         * @param {string} id ID del dispositivo.
+         * @returns {string} Token; si algo falla devuelve el ID sin codificar.
+         */
+        function encryptDeviceId(id) {
+            try {
+                var secretKey = 'app';
+                var timestamp = Date.now().toString(36);
+                var randomStr = Math.random().toString(36).substring(2, 8);
+                // Formato: [encodedKey]:[encoded]:[timestamp]:[randomStr]
+                return b64(b64(secretKey) + ':' + b64(id) + ':' + timestamp + ':' + randomStr);
+            } catch (e) {
+                console.error('Error al encriptar deviceId:', e);
+                return id;
+            }
+        }
+
+        /* ==================================================================
+           5. CARGA DE LA LIBRERÍA QR (qrcode.js)
+           ================================================================== */
+        var qrLibPromise = null;   // carga en curso (evita descargarla dos veces)
+
+        /**
+         * Inserta un <script> y espera a que cargue.
+         * @param {string} src URL del script.
+         * @returns {Promise<void>} Se rechaza si no se pudo cargar.
+         */
+        function loadScript(src) {
+            return new Promise(function (resolve, reject) {
+                var s = document.createElement('script');
+                s.src = src;
+                s.async = true;
+                s.onload = resolve;
+                s.onerror = function () {
+                    s.parentNode.removeChild(s);
+                    reject(new Error('No se pudo cargar ' + src));
+                };
+                document.head.appendChild(s);
+            });
+        }
+
+        /**
+         * Asegura que la librería QR esté cargada. Prueba las URLs de
+         * QR_LIB_URLS en orden (local primero, CDN después) hasta que una funcione.
+         * Si todas fallan se puede volver a intentar más tarde.
+         * @returns {Promise<void>}
+         */
+        function loadQRLib() {
+            if (window.QRCode) return Promise.resolve();
+            if (qrLibPromise) return qrLibPromise;
+
+            // Cadena de intentos: cada URL solo se prueba si la anterior falló
+            qrLibPromise = QR_LIB_URLS.reduce(function (chain, url) {
+                return chain.catch(function () {
+                    return loadScript(url).then(function () {
+                        if (!window.QRCode) throw new Error('QRCode no definido en ' + url);
+                    });
+                });
+            }, Promise.reject()).catch(function (err) {
+                qrLibPromise = null; // permitir reintento más tarde
+                throw err;
+            });
+            return qrLibPromise;
+        }
+
+        /* ==================================================================
+           6. UI (textos que ve el usuario)
+           ================================================================== */
+
+        /**
+         * Cambia el mensaje de estado bajo el QR.
+         * @param {string} text
+         * @param {boolean} success true = verde; false = naranja.
+         */
+        function setStatus(text, success) {
+            el.status.textContent = text;
+            el.status.classList.toggle('success', !!success);
+        }
+
+        /**
+         * Cambia el texto del recuadro del ID.
+         * @param {string} text
+         * @param {boolean} offline true = naranja (aviso sin conexión).
+         */
+        function setDeviceText(text, offline) {
+            el.deviceId.textContent = text;
+            el.deviceId.classList.toggle('offline', !!offline);
+        }
+
+        /** Muestra el spinner en el lugar del QR. */
+        function showQRLoading() {
+            el.qrWrapper.innerHTML = '<div class="loading-qr"></div>';
+        }
+
+        /** Pone la pantalla en modo "sin internet". */
+        function updateUIForOfflineMode() {
+            setDeviceText('Sin conexión a internet', true);
+            setStatus('Esperando conexión a internet para solicitar ID...', false);
+            el.logo.classList.remove('success');
+        }
+
+        /* ==================================================================
+           7. CÓDIGO QR (dibujar, vigilar y reintentar)
+           Flujo: generateQRCode() -> loadQRLib() -> renderQR()
+                  -> startQRWatchdog()   (o onQRError() si algo falla)
+           ================================================================== */
+
+        /** Detiene la vigilancia y el reintento del QR. */
+        function stopQRTimers() {
+            clearInterval(qrWatchdogTimer);
+            clearTimeout(qrRetryTimer);
+            qrWatchdogTimer = null;
+            qrRetryTimer = null;
+        }
+
+        /**
+         * Punto de entrada para dibujar el QR: carga la librería si hace
+         * falta y luego lo dibuja.
+         * @param {string} text Contenido del QR (el ID del dispositivo).
+         */
+        function generateQRCode(text) {
+            stopQRTimers();
+            loadQRLib().then(function () {
+                renderQR(text);
+            }).catch(function (err) {
+                onQRError(text, err);
+            });
+        }
+
+        /**
+         * Dibuja el QR, avisa a la app con el token y arranca la vigilancia.
+         * @param {string} text Contenido del QR.
+         */
+        function renderQR(text) {
+            // Si llegó otro ID mientras cargaba la librería, ignorar este
+            if (text !== deviceId) return;
+
+            // Borrar el QR anterior, si lo hay
+            if (qrCodeInstance) {
+                try { qrCodeInstance.clear(); } catch (e) { /* ignorar */ }
+                qrCodeInstance = null;
+            }
+
+            el.qrWrapper.innerHTML = '';
+            var box = document.createElement('div');
+            box.className = 'qr-box';
+            el.qrWrapper.appendChild(box);
+
+            try {
+                qrCodeInstance = new QRCode(box, {
+                    text: text,
+                    width: 180,                       // tamaño en px (el CSS lo ajusta al recuadro)
+                    height: 180,
+                    colorDark: '#1a237e',             // color de los módulos
+                    colorLight: '#ffffff',            // color de fondo
+                    correctLevel: QRCode.CorrectLevel.Q   // corrección de errores alta (~25%)
+                });
+            } catch (err) {
+                onQRError(text, err);
+                return;
+            }
+
+            send('fingerPrint', 'qr_generated', 'success', encryptDeviceId(text));
+
+            setStatus('Código QR generado correctamente.', true);
+            el.logo.classList.add('success');
+            console.log('Código QR generado correctamente:', text);
+
+            startQRWatchdog(box, text);
+        }
+
+        /**
+         * Verifica cada QR_WATCHDOG_MS (30 s) que el QR siga visible; si
+         * desapareció (algunas GPU de TV box borran el canvas), lo regenera.
+         * @param {HTMLElement} box Caja donde se dibujó el QR.
+         * @param {string} text Contenido del QR.
+         */
+        function startQRWatchdog(box, text) {
+            qrWatchdogTimer = setInterval(function () {
+                if (!deviceId || !isOnline) return;
+                if (!isQRVisible(box)) {
+                    console.log('QR no visible, regenerando...');
+                    generateQRCode(text);
+                }
+            }, QR_WATCHDOG_MS);
+        }
+
+        /**
+         * Comprueba si el QR se sigue viendo. qrcode.js muestra un <img> o
+         * un <canvas>; se revisa el que esté visible.
+         * @param {HTMLElement} box
+         * @returns {boolean}
+         */
+        function isQRVisible(box) {
+            if (!document.body.contains(box)) return false;
+            var img = box.querySelector('img');
+            if (img && img.style.display !== 'none' && img.complete && img.naturalWidth > 0) return true;
+            var canvas = box.querySelector('canvas');
+            if (canvas && canvas.style.display !== 'none' && canvas.width > 0) {
+                var ctx = canvas.getContext('2d');
+                // El primer píxel es colorLight (blanco opaco); alfa 0 = canvas borrado
+                return !ctx || ctx.getImageData(0, 0, 1, 1).data[3] !== 0;
+            }
+            return false;
+        }
+
+        /**
+         * Muestra "Error QR", avisa a la app y reintenta en QR_RETRY_MS.
+         * @param {string} text Contenido que se intentaba dibujar.
+         * @param {Error} err   Motivo del error.
+         */
+        function onQRError(text, err) {
+            console.error('Error generando QR:', err);
+            el.qrWrapper.innerHTML = '<div class="qr-error">Error QR</div>';
+            send('fingerPrint', 'qr_error', 'failed', '');
+
+            clearTimeout(qrRetryTimer);
+            qrRetryTimer = setTimeout(function () {
+                if (deviceId === text && isOnline) generateQRCode(text);
+            }, QR_RETRY_MS);
+        }
+
+        /* ==================================================================
+           8. SOLICITUD DEL ID A LA APP
+           ================================================================== */
+
+        /**
+         * Pide el ID a la app. La app debe responder con updateData({id:...})
+         * o setCode(...). No hace nada si no hay internet.
+         */
+        function requestDeviceId() {
+            if (!isOnline) {
+                console.log('No se puede solicitar ID: sin conexión a internet');
+                return;
+            }
+            setDeviceText('Solicitando ID del dispositivo...', false);
+            setStatus('Esperando identificación del dispositivo...', false);
+            send('fingerPrint', 'info', '');
+        }
+
+        /* ==================================================================
+           9. CONEXIÓN A INTERNET
+           navigator.onLine solo dice si hay una red (un Wi-Fi sin salida a
+           internet daría "true"), por eso se consultan servidores públicos
+           y se valida que su respuesta sea la esperada.
+
+           Ciclo: runCheck() -> probeInternet() -> applyResult()
+                  -> setOnline() -> handleOnlineStatus()/handleOfflineStatus()
+                  -> scheduleNextCheck() programa la siguiente
+           ================================================================== */
+
+        /**
+         * Comprueba que el contenido recibido sea realmente el esperado del servidor de internet.
+         * @param {string} type "dns" (respuesta DNS-over-HTTPS) | "ip" (ipify)
+         * @param {string} text Cuerpo de la respuesta.
+         * @returns {boolean}
+         */
+        function validateResponse(type, text) {
+            try {
+                var data = JSON.parse(text);
+                if (type === 'dns') {
+                    // DNS válido: Status 0 (sin error) y al menos una respuesta
+                    return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+                }
+                if (type === 'ip') {
+                    // ipify válido: devuelve la IP pública como texto
+                    return !!data && typeof data.ip === 'string' && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+                }
+            } catch (e) { /* respuesta no JSON = no es internet real */ }
+            return false;
+        }
+
+        /**
+         * Prueba UN servidor.
+         * @param {{url:string, type:string}} ep Servidor a consultar.
+         * @param {number} timeoutMs Tiempo máximo de espera.
+         * @returns {Promise<boolean>} true solo si respondió 200 Y el contenido es el esperado.
+         */
+        function pingEndpoint(ep, timeoutMs) {
+            return new Promise(function (resolve) {
+                var done = false;
+                var xhr = null;
+                var timer = setTimeout(function () { finish(false); }, timeoutMs);
+
+                // Termina una sola vez (respuesta, error o tiempo agotado)
+                function finish(ok) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    if (!ok && xhr) {
+                        try { xhr.abort(); } catch (e) { /* ignorar */ }
+                    }
+                    resolve(ok);
+                }
+
+                try {
+                    var sep = ep.url.indexOf('?') === -1 ? '?' : '&';
+                    // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+                    var pad = Math.random().toString(36).slice(2, 12);
+                    xhr = new XMLHttpRequest();
+                    xhr.open('GET', ep.url + sep + 'random_padding=' + pad, true);
+                    xhr.timeout = timeoutMs;
+                    if (ep.type === 'dns') xhr.setRequestHeader('Accept', 'application/dns-json');
+                    xhr.onload = function () {
+                        finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+                    };
+                    xhr.onerror = function () { finish(false); };
+                    xhr.ontimeout = function () { finish(false); };
+                    xhr.onabort = function () { finish(false); };
+                    xhr.send();
+                } catch (e) {
+                    finish(false);
+                }
+            });
+        }
+
+        /**
+         * Prueba todos los servidores en paralelo; basta con que uno sea válido.
+         * Responde en cuanto llega el primer éxito (no espera a los demás).
+         * @returns {Promise<boolean>} true si hay internet.
+         */
+        function probeInternet() {
+            var eps = CONNECTION_CONFIG.endpoints;
+            return new Promise(function (resolve) {
+                var pending = eps.length;
+                var resolved = false;
+                if (!pending) {
+                    resolve(false);
+                    return;
+                }
+                eps.forEach(function (ep) {
+                    pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+                        if (resolved) return;
+                        if (ok) {
+                            resolved = true;
+                            resolve(true);
+                        } else if (--pending === 0) {
+                            resolved = true;
+                            resolve(false);
+                        }
+                    });
+                });
+            });
+        }
+
+        /**
+         * Pasa a modo "sin internet": detiene el QR, avisa a la app ahora y
+         * cada OFFLINE_SIGNAL_MS, y muestra el aviso en pantalla.
+         */
+        function handleOfflineStatus() {
+            console.log('Estado: OFFLINE');
+            isOnline = false;
+            internetStatus = 'offline';
+            stopQRTimers();
+
+            clearInterval(offlineTimer);
+            sendConnectionStatus();
+            offlineTimer = setInterval(sendConnectionStatus, OFFLINE_SIGNAL_MS);
+
+            updateUIForOfflineMode();
+        }
+
+        /**
+         * Pasa a modo "con internet": deja de repetir el aviso offline,
+         * avisa a la app y, si venía de offline, vuelve a pedir el ID.
+         */
+        function handleOnlineStatus() {
+            console.log('Estado: ONLINE');
+            var wasOffline = internetStatus === 'offline';
+            isOnline = true;
+            internetStatus = 'online';
+            clearInterval(offlineTimer);
+            offlineTimer = null;
+
+            sendConnectionStatus();
+            // Al arrancar el ID ya se pidió; solo se vuelve a pedir al recuperar la conexión
+            // o si todavía no hay ID.
+            if (wasOffline || !deviceId) requestDeviceId();
+        }
+
+        /**
+         * Cambia al estado indicado solo si es distinto al actual.
+         * @param {boolean} online
+         */
+        function setOnline(online) {
+            var next = online ? 'online' : 'offline';
+            if (next === internetStatus) return;
+            if (online) handleOnlineStatus();
+            else handleOfflineStatus();
+        }
+
+        /**
+         * Decide el nuevo estado a partir del resultado de una verificación.
+         * Histéresis: un fallo aislado no declara "offline"; un éxito sí declara "online".
+         * @param {boolean} ok        Resultado de la verificación.
+         * @param {boolean} immediate true = aplicar sin histéresis (verificación manual).
+         */
+        function applyResult(ok, immediate) {
+            if (ok) {
+                failures = 0;
+                setOnline(true);
+            } else {
+                failures++;
+                if (immediate || internetStatus !== 'online' ||
+                    failures >= CONNECTION_CONFIG.failuresToOffline) {
+                    setOnline(false);
+                }
+            }
+        }
+
+        /**
+         * Programa la próxima verificación: onlineIntervalMs con internet
+         * (retryIntervalMs tras un fallo) u offlineIntervalMs sin internet.
+         */
+        function scheduleNextCheck() {
+            var delay;
+            if (internetStatus === 'online') {
+                delay = failures > 0 ? CONNECTION_CONFIG.retryIntervalMs : CONNECTION_CONFIG.onlineIntervalMs;
+            } else {
+                delay = CONNECTION_CONFIG.offlineIntervalMs;
+            }
+            clearTimeout(checkTimer);
+            checkTimer = setTimeout(function () { runCheck(false); }, delay);
+        }
+
+        /**
+         * Ejecuta una verificación real (sin solapes: si ya hay una en
+         * curso, devuelve esa misma).
+         * forceReport = true: el resultado se aplica sin histéresis y siempre se reporta.
+         * @param {boolean} forceReport
+         * @returns {Promise<boolean>} true si hay internet.
+         */
+        function runCheck(forceReport) {
+            if (currentCheck) {
+                if (forceReport) {
+                    return currentCheck.then(function (online) {
+                        sendConnectionStatus();
+                        return online;
+                    });
+                }
+                return currentCheck;
+            }
+
+            clearTimeout(checkTimer);
+
+            // Sin red local (Wi-Fi/cable desconectado) no hace falta consultar servidores
+            if (!navigator.onLine) {
+                lastLatency = 0;
+                var before = internetStatus;
+                applyResult(false, true);
+                if (forceReport && before === internetStatus) sendConnectionStatus();
+                scheduleNextCheck();
+                return Promise.resolve(false);
+            }
+
+            var started = Date.now();
+            currentCheck = probeInternet().then(function (ok) {
+                currentCheck = null;
+                lastLatency = Date.now() - started;
+                var before = internetStatus;
+                applyResult(ok, !!forceReport);
+                // Si el estado cambió ya se reportó; si no, se reporta aquí
+                if (forceReport && before === internetStatus) sendConnectionStatus();
+                scheduleNextCheck();
+                return internetStatus === 'online';
+            });
+            return currentCheck;
+        }
+
+        /**
+         * Escucha los eventos del sistema que indican un posible cambio de red
+         * y hace la primera verificación. Los eventos no cambian el estado
+         * directamente: solo disparan una verificación real.
+         */
+        function startConnectionMonitoring() {
+            // Los eventos del navegador solo disparan una verificación real
+            window.addEventListener('online', function () { runCheck(false); });
+            window.addEventListener('offline', function () { runCheck(false); });
+            // Al volver a mostrarse la app (por ejemplo, tras salir de otra pantalla)
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) runCheck(false);
+            });
+            // Cambio de tipo de red (Wi-Fi <-> cable, etc.), si el WebView lo soporta
+            if (navigator.connection && navigator.connection.addEventListener) {
+                navigator.connection.addEventListener('change', function () { runCheck(false); });
+            }
+            runCheck(false);
+        }
+
+        /* ==================================================================
+           10. ICONOS FLOTANTES DE FONDO (solo animación CSS, sin timers JS)
+           ================================================================== */
+
+        /**
+         * Crea FLOATING_ICON_COUNT iconos SVG con posición, opacidad,
+         * recorrido y velocidad al azar. Después de crearlos, todo el
+         * movimiento lo hace el CSS (no hay más trabajo de JavaScript).
+         */
+        function createFloatingIcons() {
+            // Iconos SVG inline (trazos de 24x24). Para agregar uno: añadir una
+            // línea con su dibujo SVG (viewBox 0 0 24 24).
+            var iconPaths = [
+                // Código de barras
+                '<path d="M3 5v14M6 5v14M10 5v14M13 5v14M17 5v14M21 5v14M8 5v14M19 5v14" stroke-width="1.5"/>',
+                // Código QR
+                '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M18 18h3v3"/>',
+                // Credencial / tarjeta de identidad
+                '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16a3 3 0 0 1 6 0M14 10h5M14 14h4"/>',
+                // Llave
+                '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2M17 6l3 3M14 9l2 2"/>',
+                // Huella digital
+                '<path d="M12 11v4M8 7.5a5 5 0 0 1 8 4V14M6 11a6 6 0 0 1 .5-2.5M5 16a12 12 0 0 0 1-5M18 12v1a12 12 0 0 1-1 5M9 21a9 9 0 0 0 2-7v-3a1 1 0 0 1 2 0"/>',
+                // Usuario verificado
+                '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
+                // Candado
+                '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+            ];
+            var animations = ['float', 'float2', 'float3'];   // recorridos definidos en el CSS
+            var frag = document.createDocumentFragment();     // se insertan todos de una vez
+            var wrapper = document.createElement('div');      // auxiliar para convertir texto SVG en elemento
+
+            for (var i = 0; i < FLOATING_ICON_COUNT; i++) {
+                wrapper.innerHTML = '<svg class="floating-icon icon-' + ((i % 6) + 1) +
+                    '" viewBox="0 0 24 24">' + iconPaths[i % iconPaths.length] + '</svg>';
+                var icon = wrapper.firstChild;
+
+                var anim = animations[Math.floor(Math.random() * animations.length)];
+                var duration = 18 + Math.random() * 25;   // entre 18 y 43 segundos por vuelta
+                // Retraso negativo: cada icono arranca en un punto distinto de su recorrido
+                var delay = -Math.random() * duration;
+
+                icon.style.left = (Math.random() * 95) + '%';
+                icon.style.top = (Math.random() * 95) + '%';
+                icon.style.opacity = (0.3 + Math.random() * 0.4).toFixed(2);
+                icon.style.animation = anim + ' ' + duration.toFixed(1) + 's ease-in-out ' +
+                    delay.toFixed(1) + 's infinite';
+
+                frag.appendChild(icon);
+            }
+            document.getElementById('floating-icons-container').appendChild(frag);
+        }
+
+        /* ==================================================================
+           11. ORIENTACIÓN Y ESCALA (igual que connection.html)
+           ================================================================== */
+
+        /** Límites y valores iniciales de orientación y escala. */
+        var LAYOUT_CONFIG = {
+            allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
+            defaultOrientation: 0,  // se usa si nunca se guardó una orientación en config.html
+            defaultScale: 100,      // tamaño inicial en porcentaje
+            minScale: 10,           // porcentaje mínimo aceptado
+            maxScale: 300,          // porcentaje máximo aceptado
+            // Clave de localStorage donde config.html guarda la orientación.
+            // Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html.
+            orientationKey: 'smartpizarra.orientation'
+        };
+
+        /**
+         * Lee la orientación guardada por config.html (localStorage).
+         * @returns {string|null} Valor guardado, o null si no hay ninguno o si el
+         *          WebView no permite localStorage. layoutManager.setOrientation()
+         *          lo valida (un valor inválido se ignora).
+         */
+        function readSavedOrientation() {
+            try {
+                return window.localStorage.getItem(LAYOUT_CONFIG.orientationKey);
+            } catch (e) {
+                console.log('No se pudo leer localStorage:', e);
+                return null;
+            }
+        }
+
+        // Cómo funciona la rotación:
+        //  - #stage se gira con CSS transform alrededor de su esquina superior
+        //    izquierda y luego se desplaza (translate) para volver a cubrir la pantalla.
+        //  - Con 90° y 270° el escenario "se acuesta": ancho y alto se intercambian.
+        //  - #scaler escala el contenido desde su centro.
+        var layoutManager = {
+            stage: null,                                   // elemento #stage (se busca al iniciar)
+            scaler: null,                                  // elemento #scaler
+            orientation: LAYOUT_CONFIG.defaultOrientation, // grados actuales: 0, 90, 180 o 270
+            scale: LAYOUT_CONFIG.defaultScale,             // porcentaje actual
+
+            /**
+             * Aplica la orientación guardada en config.html y lo vuelve a aplicar
+             * si la pantalla cambia de tamaño o de orientación física.
+             */
+            init: function () {
+                var self = this;
+                this._ensureElements();
+                this.setOrientation(readSavedOrientation());
+                this.apply();
+                var reapply = function () { self.apply(); };
+                window.addEventListener('resize', reapply);
+                window.addEventListener('orientationchange', reapply);
+
+                // Si config.html guarda otra orientación mientras esta página está
+                // abierta (en otro WebView), se aplica al momento
+                window.addEventListener('storage', function (e) {
+                    if (e.key === LAYOUT_CONFIG.orientationKey && self.setOrientation(e.newValue)) {
+                        self.apply();
+                    }
+                });
+            },
+
+            /**
+             * Busca #stage y #scaler si aún no se encontraron.
+             * @returns {boolean} true si ambos existen.
+             * @private
+             */
+            _ensureElements: function () {
+                if (!this.stage) this.stage = document.getElementById('stage');
+                if (!this.scaler) this.scaler = document.getElementById('scaler');
+                return !!(this.stage && this.scaler);
+            },
+
+            /**
+             * Cambia la orientación si el valor es válido; si no, la deja igual.
+             * Acepta números o textos numéricos. 360 = 0 y los negativos se
+             * normalizan (-90 equivale a 270). No aplica el cambio: llamar a apply().
+             * @param {number|string} value Grados.
+             * @returns {boolean} true si cambió.
+             */
+            setOrientation: function (value) {
+                if (value === undefined || value === null) return false;
+                var degrees = parseInt(value, 10);
+                if (isNaN(degrees)) return false;
+                degrees = ((degrees % 360) + 360) % 360;   // lleva cualquier valor al rango 0-359
+                if (LAYOUT_CONFIG.allowedOrientations.indexOf(degrees) === -1) return false;
+                this.orientation = degrees;
+                return true;
+            },
+
+            /**
+             * Cambia el tamaño si el valor es válido; se limita entre minScale y
+             * maxScale. No aplica el cambio: llamar a apply().
+             * @param {number|string} value Porcentaje (100 = tamaño normal).
+             * @returns {boolean} true si cambió.
+             */
+            setScale: function (value) {
+                if (value === undefined || value === null) return false;
+                var percent = parseFloat(value);
+                if (!isFinite(percent) || percent <= 0) return false;
+                this.scale = Math.min(LAYOUT_CONFIG.maxScale, Math.max(LAYOUT_CONFIG.minScale, percent));
+                return true;
+            },
+
+            /** Aplica al HTML la orientación y el tamaño actuales. */
+            apply: function () {
+                if (!this._ensureElements()) return;
+
+                var width = window.innerWidth || document.documentElement.clientWidth;
+                var height = window.innerHeight || document.documentElement.clientHeight;
+
+                var stageWidth = width;
+                var stageHeight = height;
+                var transform = 'none';
+
+                // Para cada giro: medidas del escenario y desplazamiento que lo devuelve a la pantalla
+                if (this.orientation === 90) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(' + width + 'px, 0px) rotate(90deg)';
+                } else if (this.orientation === 180) {
+                    transform = 'translate(' + width + 'px, ' + height + 'px) rotate(180deg)';
+                } else if (this.orientation === 270) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(0px, ' + height + 'px) rotate(270deg)';
+                }
+
+                this.stage.style.width = stageWidth + 'px';
+                this.stage.style.height = stageHeight + 'px';
+                this._setTransform(this.stage, transform, '0 0');
+                this._setTransform(this.scaler, 'scale(' + this.scale / 100 + ')', '50% 50%');
+            },
+
+            /**
+             * Asigna transform y transform-origin a un elemento.
+             * @param {HTMLElement} element
+             * @param {string} value  Valor de transform (ej. 'rotate(90deg)').
+             * @param {string} origin Valor de transform-origin (ej. '0 0').
+             * @private
+             */
+            _setTransform: function (element, value, origin) {
+                element.style.webkitTransformOrigin = origin;
+                element.style.transformOrigin = origin;
+                element.style.webkitTransform = value;
+                element.style.transform = value;
+            }
+        };
+
+        /* ==================================================================
+           12. PROTECCIÓN ANTI-QUEMADO DE PANTALLA
+           Esta pantalla puede quedarse visible horas. Para que ningún píxel
+           muestre siempre lo mismo se combinan 3 técnicas:
+             - startPixelShift():  mueve la tarjeta unos píxeles cada minuto.
+             - startAccentShift(): cambia poco a poco el color del sitio web.
+             - startDimming():     atenúa la pantalla tras 5 min sin actividad.
+           ================================================================== */
+        var dimTimer = null;   // temporizador de la atenuación
+
+        // "Pixel shift": mueve todo el bloque central unos píxeles cada minuto para que
+        // el QR, los textos y los bordes no queden fijos siempre en los mismos píxeles.
+        // Se usa left/top (no transform) para no tocar las capas de GPU que contienen el QR.
+        function startPixelShift() {
+            var box = document.querySelector('.device-id-container');
+            setInterval(function () {
+                var r = PIXEL_SHIFT_RANGE;
+                box.style.left = Math.round(Math.random() * 2 * r - r) + 'px';
+                box.style.top = Math.round(Math.random() * 2 * r - r) + 'px';
+            }, PIXEL_SHIFT_MS);
+        }
+
+        // Rotación lenta del color de acento (sitio web), igual que connection.html:
+        // avanza 15° de tono cada ACCENT_SHIFT_MS
+        function startAccentShift() {
+            var colorStep = 0;
+            setInterval(function () {
+                colorStep = (colorStep + 15) % 360;
+                document.documentElement.style.setProperty(
+                    '--accent', 'hsl(' + ((187 + colorStep) % 360) + ', 100%, 38%)');
+            }, ACCENT_SHIFT_MS);
+        }
+
+        // Atenúa la pantalla tras un tiempo sin actividad; se reactiva con el control
+        // remoto, un toque, o cuando Kodular envía datos nuevos.
+        function wakeScreen() {
+            document.body.classList.remove('dimmed');
+            clearTimeout(dimTimer);
+            dimTimer = setTimeout(function () {
+                document.body.classList.add('dimmed');
+            }, DIM_AFTER_MS);
+        }
+
+        // Cualquier tecla (control remoto), toque o clic reactiva la pantalla
+        function startDimming() {
+            ['keydown', 'touchstart', 'mousedown'].forEach(function (evt) {
+                window.addEventListener(evt, wakeScreen, { passive: true });
+            });
+            wakeScreen();
+        }
+
+        /* ==================================================================
+           13. API PÚBLICA (llamada desde Kodular con RunJavaScript)
+           Ver la lista completa en "FUNCIONES PUBLICAS" al inicio del archivo.
+           ================================================================== */
+        window.wakeScreen = wakeScreen;
+
+        /**
+         * Recibe el ID del dispositivo, lo muestra y genera su QR.
+         * Si llega vacío, avisa a la app ("id_empty") y lo vuelve a pedir.
+         * Se ignora si no hay internet.
+         * @param {string} id
+         */
+        window.setCode = function (id) {
+            if (!isOnline) {
+                console.log('Recibido ID pero estamos offline, ignorando...');
+                return;
+            }
+
+            id = (id === null || id === undefined) ? '' : String(id).trim();
+            if (!id) {
+                console.error('ID vacío recibido. Re-solicitando...');
+                send('fingerPrint', 'id_empty', 'error');
+                setTimeout(requestDeviceId, EMPTY_ID_RETRY_MS);
+                return;
+            }
+
+            deviceId = id;
+            console.log('ID del dispositivo recibido:', deviceId);
+            wakeScreen();
+            setDeviceText(deviceId, false);
+            showQRLoading();
+            generateQRCode(deviceId);
+        };
+
+        /**
+         * Recibe los datos de la app (ver "contrato de entrada" al inicio del archivo).
+         * @param {string|object} jsonData Texto JSON u objeto.
+         */
+        window.updateData = function (jsonData) {
+            try {
+                var data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+                if (!data) return;
+                console.log('updateData recibido:', data);
+
+                // Tamaño (opcional): scale 10-300. La orientación NO: se lee de config.html
+                layoutManager.setScale(data.scale);
+                layoutManager.apply();
+
+                if (data.url) el.website.textContent = data.url;
+                if (data.version) el.version.textContent = 'Versión: ' + data.version;
+                if (data.email) el.email.textContent = data.email;
+
+                // El ID puede llegar como "id" o como "deviceId"
+                if (data.id) window.setCode(data.id);
+                else if (data.deviceId) window.setCode(data.deviceId);
+            } catch (e) {
+                console.error('Error al procesar updateData:', e);
+            }
+        };
+
+        /** Vuelve a dibujar el QR del ID actual. */
+        window.refreshQR = function () {
+            if (deviceId && isOnline) {
+                console.log('Refrescando código QR...');
+                generateQRCode(deviceId);
+            }
+        };
+
+        /** Borra el ID actual y lo pide de nuevo a la app. */
+        window.requestIdAgain = function () {
+            if (isOnline) {
+                deviceId = null;
+                stopQRTimers();
+                showQRLoading();
+                el.logo.classList.remove('success');
+                requestDeviceId();
+            }
+        };
+
+        // Solo para pruebas: fuerzan el modo sin/con internet
+        // (la siguiente verificación automática corrige el estado real).
+        window.simulateOffline = handleOfflineStatus;
+        window.simulateOnline = handleOnlineStatus;
+
+        // Fuerza una verificación real y envía el resultado a la app.
+        // Devuelve el último estado conocido ('online' | 'offline' | 'unknown').
+        window.checkConnection = function () {
+            runCheck(true);
+            return internetStatus;
+        };
+
+        // Versión asíncrona: Promise<boolean> con el resultado real.
+        window.checkConnectionAsync = function () {
+            return runCheck(true);
+        };
+
+        /* ==================================================================
+           14. INICIO
+           ================================================================== */
+
+        /** Arranca la pantalla. Se ejecuta una sola vez, cuando el HTML está listo. */
+        function init() {
+            el.deviceId = document.getElementById('device-id');
+            el.status = document.getElementById('connection-status');
+            el.qrWrapper = document.getElementById('qr-wrapper');
+            el.logo = document.getElementById('logo');
+            el.website = document.getElementById('websiteUrl');
+            el.version = document.getElementById('versionText');
+            el.email = document.getElementById('emailContact');
+
+            console.log('Generador de ID de dispositivo cargado.');
+
+            // Aplica la orientación guardada en config.html (la escala puede cambiar con updateData)
+            layoutManager.init();
+
+            // Precargar la librería QR mientras se espera el ID
+            loadQRLib().catch(function (e) { console.log(e.message); });
+
+            createFloatingIcons();
+            startPixelShift();
+            startAccentShift();
+            startDimming();
+            startConnectionMonitoring();
+            requestDeviceId();
+
+            // Limpieza al cerrar la página
+            window.addEventListener('beforeunload', function () {
+                stopQRTimers();
+                clearInterval(offlineTimer);
+            });
+        }
+
+        // Si el HTML aún se está cargando, esperar; si no, arrancar ya
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+    </script>
+</body>
+</html>

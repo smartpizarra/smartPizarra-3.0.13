@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cargando...</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #002B4F;
+        }
+
+        body {
+            position: relative;
+            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
+            color: #ffffff;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        /* Escenario: se rota 0/90/180/270° y sus medidas se ajustan por JS */
+        #stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+        }
+
+        /* Contenedor que recibe el porcentaje de tamaño (scale) */
+        #scaler {
+            width: 100%;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+        }
+
+        .splash-container {
+            text-align: center;
+            max-width: 100%;
+            width: 400px;
+            padding: 0 20px;
+        }
+
+        .logo {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 30px;
+            border-radius: 20px;
+            background: #2196f3; /* respaldo */
+            background: -webkit-linear-gradient(45deg, #2196f3, #21cbf3);
+            background: linear-gradient(45deg, #2196f3, #21cbf3);
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-pack: center;
+            -webkit-justify-content: center;
+            justify-content: center;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+            -webkit-box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+            box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+            -webkit-animation: float 3s ease-in-out infinite;
+            animation: float 3s ease-in-out infinite;
+            will-change: transform;
+        }
+
+        .logo-icon { font-size: 48px; font-weight: bold; }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 5px;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 8px;
+        }
+
+        .website {
+            font-size: 1.1rem;
+            color: #00e5ff;
+            margin-bottom: 8px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .email-contact {
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+        }
+
+        .system-id {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 8px;
+            word-wrap: break-word;
+            word-break: break-all;
+        }
+
+        /* Si el campo no recibió datos, no ocupa espacio */
+        .info:empty { display: none; }
+
+        .loading-container {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 22px;
+            margin-bottom: 20px;
+        }
+
+        .loading-bar {
+            height: 100%;
+            width: 0%;
+            background: #00e5ff; /* respaldo */
+            background: -webkit-linear-gradient(left, #00e5ff, #2979ff);
+            background: linear-gradient(90deg, #00e5ff, #2979ff);
+            border-radius: 2px;
+            -webkit-transition: width 0.3s ease;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 10px;
+        }
+
+        .loading-steps {
+            margin-top: 30px;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+        }
+
+        .step {
+            margin: 10px 0;
+            display: -webkit-box;
+            display: -webkit-flex;
+            display: flex;
+            -webkit-box-align: center;
+            -webkit-align-items: center;
+            align-items: center;
+            opacity: 0.5;
+            -webkit-transition: opacity 0.3s ease;
+            transition: opacity 0.3s ease;
+        }
+
+        .step.active { opacity: 1; color: #00e5ff; }
+
+        .step-check { margin-right: 10px; font-size: 1.2rem; }
+
+        /* Puntos animados: 3 spans con opacidad (no se anima "content") */
+        .dots span {
+            opacity: 0;
+            -webkit-animation: dotBlink 1.5s linear infinite;
+            animation: dotBlink 1.5s linear infinite;
+        }
+        .dots span:nth-child(2) {
+            -webkit-animation-delay: 0.25s;
+            animation-delay: 0.25s;
+        }
+        .dots span:nth-child(3) {
+            -webkit-animation-delay: 0.5s;
+            animation-delay: 0.5s;
+        }
+        .done .dots span {
+            -webkit-animation: none;
+            animation: none;
+            opacity: 0;
+        }
+
+        .welcome {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .welcome h2 { margin-bottom: 10px; }
+        .welcome p { color: #00e5ff; }
+
+        @-webkit-keyframes float {
+            0%, 100% { -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
+            50%      { -webkit-transform: translate3d(0, -15px, 0); transform: translate3d(0, -15px, 0); }
+        }
+        @keyframes float {
+            0%, 100% { -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
+            50%      { -webkit-transform: translate3d(0, -15px, 0); transform: translate3d(0, -15px, 0); }
+        }
+
+        @-webkit-keyframes dotBlink {
+            0%, 100% { opacity: 0; }
+            20%, 80% { opacity: 1; }
+        }
+        @keyframes dotBlink {
+            0%, 100% { opacity: 0; }
+            20%, 80% { opacity: 1; }
+        }
+
+        @-webkit-keyframes fadeOut {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+
+        .fade-out {
+            -webkit-animation: fadeOut 0.5s ease forwards;
+            animation: fadeOut 0.5s ease forwards;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .logo { -webkit-animation: none; animation: none; }
+        }
+    </style>
+</head>
+<body>
+    <div id="stage"><div id="scaler">
+    <div class="splash-container" id="splashContainer">
+        <div class="logo">
+            <div class="logo-icon">SP</div>
+        </div>
+        <h1>Smart Pizarra</h1>
+        <!-- Se llenan con updateData(); si no llegan datos, quedan vacíos y ocultos -->
+        <div class="info subtitle" id="versionText"></div>
+        <div class="info website" id="websiteUrl"></div>
+        <div class="info email-contact" id="emailContact"></div>
+        <div class="info system-id" id="systemId"></div>
+
+        <div class="loading-container">
+            <div class="loading-bar" id="loadingBar"></div>
+        </div>
+        <div class="progress-text" id="progressText">Starting system...</div>
+
+        <div class="loading-steps" id="loadingSteps">
+            <div class="step active" id="step1"><span class="step-check">&#10003;</span> Loading configuration...</div>
+            <div class="step" id="step2"><span class="step-check">&#10003;</span> Initializing modules...</div>
+            <div class="step" id="step3"><span class="step-check">&#10003;</span> Preparing interface...</div>
+            <div class="step" id="step4"><span class="step-check">&#10003;</span> Loading complete<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>
+        </div>
+    </div>
+
+    <div class="welcome" id="welcome">
+        <h2>¡Bienvenido a Smart Pizarra!</h2>
+        <p>smartpizarra.com</p>
+    </div>
+    </div></div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var TOTAL_DURATION = 8000; // duración total en milisegundos
+            var TOTAL_STEPS = 4;
+
+            var loadingBar   = document.getElementById('loadingBar');
+            var progressText = document.getElementById('progressText');
+            var container    = document.getElementById('splashContainer');
+            var stepsBox     = document.getElementById('loadingSteps');
+            var welcome      = document.getElementById('welcome');
+
+            function updateProgress(percent) {
+                loadingBar.style.width = percent + '%';
+
+                if (percent < 25)      { progressText.textContent = 'Starting system...'; }
+                else if (percent < 50) { progressText.textContent = 'Loading modules...'; }
+                else if (percent < 75) { progressText.textContent = 'Preparing interface...'; }
+                else                   { progressText.textContent = 'Completing setup...'; }
+            }
+
+            function updateSteps(percent) {
+                var stepIndex = Math.floor(percent / 25);
+                for (var i = 1; i <= TOTAL_STEPS; i++) {
+                    var step = document.getElementById('step' + i);
+                    if (i <= stepIndex + 1) {
+                        step.classList.add('active');
+                    } else {
+                        step.classList.remove('active');
+                    }
+                }
+            }
+
+            function completeLoading() {
+                stepsBox.classList.add('done');
+
+                // Obtiene el estado real de internet y notifica a la app al terminar
+                whenInternetReady(function (status) {
+                    sendToAppInventor(JSON.stringify({
+                        origin: 'loadingPage',
+                        action: 'loading',
+                        status: 'true',
+                        internet: status      // 'online' u 'offline', según la comprobación
+                    }));
+
+                    container.classList.add('fade-out');
+
+                    setTimeout(function () {
+                        container.style.display = 'none';
+                        welcome.style.display = 'block';
+                    }, 500);
+                });
+            }
+
+            var DATA_WAIT = 5000;   // tiempo máximo de espera de datos (ms)
+            var started = false;    // evita iniciar la animación dos veces
+            var waitTimer = null;
+
+            var stage  = document.getElementById('stage');
+            var scaler = document.getElementById('scaler');
+            var currentOrientation = 0;   // 0, 90, 180 o 270 grados
+            var currentScale = 100;       // porcentaje de tamaño (10 a 300)
+
+            function setTransform(el, value, origin) {
+                el.style.webkitTransformOrigin = origin;
+                el.style.transformOrigin = origin;
+                el.style.webkitTransform = value;
+                el.style.transform = value;
+            }
+
+            // Rota el escenario y aplica el porcentaje de tamaño
+            function applyLayout() {
+                var w = window.innerWidth  || document.documentElement.clientWidth;
+                var h = window.innerHeight || document.documentElement.clientHeight;
+                var sw = w, sh = h, t = 'none';
+
+                if (currentOrientation === 90) {
+                    sw = h; sh = w;
+                    t = 'translate(' + w + 'px, 0px) rotate(90deg)';
+                } else if (currentOrientation === 180) {
+                    t = 'translate(' + w + 'px, ' + h + 'px) rotate(180deg)';
+                } else if (currentOrientation === 270) {
+                    sw = h; sh = w;
+                    t = 'translate(0px, ' + h + 'px) rotate(270deg)';
+                }
+
+                stage.style.width  = sw + 'px';
+                stage.style.height = sh + 'px';
+                setTransform(stage, t, '0 0');
+                setTransform(scaler, 'scale(' + (currentScale / 100) + ')', '50% 50%');
+            }
+
+            // Lee "orientation" y "scale" del JSON; si no vienen o son inválidos, no cambia nada
+            function applyOptions(data) {
+                if (data.orientation !== undefined && data.orientation !== null) {
+                    var o = parseInt(data.orientation, 10);
+                    if (!isNaN(o)) {
+                        o = ((o % 360) + 360) % 360;   // 360 equivale a 0
+                        if (o === 0 || o === 90 || o === 180 || o === 270) {
+                            currentOrientation = o;
+                        }
+                    }
+                }
+                if (data.scale !== undefined && data.scale !== null) {
+                    var s = parseFloat(data.scale);
+                    if (isFinite(s) && s > 0) {
+                        currentScale = Math.min(300, Math.max(10, s));
+                    }
+                }
+                applyLayout();
+            }
+
+            // Muestra un texto en un campo; si no hay valor, el campo queda oculto
+            function setInfo(id, prefix, value) {
+                var el = document.getElementById(id);
+                if (!el) { return; }
+                if (value !== undefined && value !== null && String(value) !== '') {
+                    el.textContent = prefix + String(value);
+                }
+            }
+
+            // Recibe: updateData('{"version":"3.0.12","url":"...","email":"...","id":"..."}')
+            // También acepta un objeto directamente.
+            function updateData(jsonData) {
+                var data;
+                try {
+                    data = (typeof jsonData === 'string') ? JSON.parse(jsonData) : jsonData;
+                } catch (e) {
+                    console.log('updateData: JSON inválido', e);
+                    return; // si falla, se sigue esperando y el timeout continúa normal
+                }
+                if (!data || typeof data !== 'object') { return; }
+
+                setInfo('versionText', 'Versión: ', data.version);
+                setInfo('websiteUrl', '', data.url);
+                setInfo('emailContact', '', data.email);
+                setInfo('systemId', 'Id: ', data.id);
+                applyOptions(data);
+
+                // Llegaron los datos: inicia la animación de inmediato
+                startLoading();
+            }
+            window.updateData = updateData;
+
+            // ---------- ENVÍO DE MENSAJES A KODULAR / APPINVENTOR ----------
+            function sendToAppInventor(message) {
+                // Método 1: AppInventor específico
+                if (typeof window.AppInventor !== 'undefined') {
+                    window.AppInventor.setWebViewString(message);
+                }
+                // Método 2: Android (versiones más nuevas)
+                else if (window.android && window.android.onReceiveValue) {
+                    window.android.onReceiveValue(message);
+                }
+                // Método 3: Interface estándar
+                else if (window.androidInterface) {
+                    window.androidInterface.onReceiveValue(message);
+                }
+                // Método 4: PostMessage para WebView
+                else {
+                    try {
+                        window.postMessage(message, '*');
+                    } catch (e) {
+                        console.log('PostMessage falló:', e);
+                    }
+                }
+                console.log('Enviado a AppInventor:', message);
+            }
+
+            // ---------- COMPROBACIÓN DE INTERNET ----------
+            // navigator.onLine solo dice si hay red, no si hay internet real,
+            // por eso se hace una petición de prueba a servidores livianos.
+            var CHECK_URLS = [
+                'https://www.gstatic.com/generate_204',
+                'https://www.cloudflare.com/cdn-cgi/trace'
+            ];
+            var CHECK_TIMEOUT = 4000;     // tiempo máximo por petición (ms)
+            var READY_TIMEOUT = 3000;     // espera máxima al terminar la animación (ms)
+            var internetStatus = null;    // 'online' | 'offline' | null (aún sin resultado)
+            var checking = false;
+            var pendingCallbacks = [];
+
+            function pingUrl(url, done) {
+                var finished = false;
+                function end(ok) {
+                    if (finished) { return; }
+                    finished = true;
+                    clearTimeout(timer);
+                    done(ok);
+                }
+                var timer = setTimeout(function () { end(false); }, CHECK_TIMEOUT);
+
+                if (!window.fetch) {
+                    end(navigator.onLine !== false);
+                    return;
+                }
+                var sep = (url.indexOf('?') === -1) ? '?' : '&';
+                fetch(url + sep + 't=' + new Date().getTime(), {
+                    method: 'GET',
+                    mode: 'no-cors',
+                    cache: 'no-store'
+                }).then(function () {
+                    end(true);
+                }).catch(function () {
+                    end(false);
+                });
+            }
+
+            function finishCheck(status) {
+                internetStatus = status;
+                checking = false;
+                var cbs = pendingCallbacks;
+                pendingCallbacks = [];
+                for (var i = 0; i < cbs.length; i++) { cbs[i](status); }
+            }
+
+            // Online si responde cualquiera de las URLs; offline si fallan todas
+            function checkInternet() {
+                if (checking) { return; }
+                checking = true;
+
+                if (navigator.onLine === false) {
+                    finishCheck('offline');
+                    return;
+                }
+
+                var remaining = CHECK_URLS.length;
+                var resolved = false;
+                CHECK_URLS.forEach(function (url) {
+                    pingUrl(url, function (ok) {
+                        if (resolved) { return; }
+                        if (ok) {
+                            resolved = true;
+                            finishCheck('online');
+                        } else {
+                            remaining--;
+                            if (remaining === 0) {
+                                resolved = true;
+                                finishCheck('offline');
+                            }
+                        }
+                    });
+                });
+            }
+
+            // Entrega el resultado; si aún se está comprobando, espera un máximo de READY_TIMEOUT
+            function whenInternetReady(cb) {
+                function fallback() {
+                    return internetStatus || (navigator.onLine === false ? 'offline' : 'online');
+                }
+                if (!checking) { cb(fallback()); return; }
+
+                var called = false;
+                function once(status) {
+                    if (called) { return; }
+                    called = true;
+                    cb(status);
+                }
+                pendingCallbacks.push(once);
+                setTimeout(function () { once(fallback()); }, READY_TIMEOUT);
+            }
+
+            function startLoading() {
+                if (started) { return; }
+                started = true;
+                if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
+
+                checkInternet();   // comprueba internet mientras corre la animación
+                var recheckDone = false;
+
+                var start = new Date().getTime();
+                var timer = setInterval(function () {
+                    var elapsed = new Date().getTime() - start;
+                    var progress = Math.min(100, (elapsed / TOTAL_DURATION) * 100);
+
+                    updateProgress(progress);
+                    updateSteps(progress);
+
+                    // Segunda comprobación a mitad de la animación (dato más reciente)
+                    if (!recheckDone && progress >= 60) {
+                        recheckDone = true;
+                        checkInternet();
+                    }
+
+                    if (progress >= 100) {
+                        clearInterval(timer);
+                        completeLoading();
+                    }
+                }, 50);
+            }
+
+            // Espera hasta 5 segundos a que llegue updateData().
+            // Si no llegan datos, la animación inicia igual, sin mostrar los campos.
+            function init() {
+                applyLayout();
+                window.addEventListener('resize', applyLayout);
+                window.addEventListener('orientationchange', applyLayout);
+                waitTimer = setTimeout(startLoading, DATA_WAIT);
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+        })();
+    </script>
+</body>
+</html>

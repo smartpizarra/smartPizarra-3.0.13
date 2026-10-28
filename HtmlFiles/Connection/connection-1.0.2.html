@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sin Conexión - Smart Pizarra</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --accent: hsl(187, 100%, 38%);
+        --logo-a: hsl(4, 60%, 42%);
+        --logo-b: hsl(33, 70%, 46%);
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #141a5e;
+      }
+
+      /* Capa negra que reduce el brillo máximo de toda la pantalla */
+      .dimmer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        opacity: 0.2;
+        pointer-events: none;
+        z-index: 100;
+        transition: opacity 10s linear;
+      }
+
+      body {
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
+        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
+        color: rgba(255, 255, 255, 0.88);
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        position: relative;
+      }
+
+      /* #stage: se rota 0/90/180/270. Su ancho y alto los fija el JS
+         (se intercambian al rotar 90 o 270) */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* #scaler: recibe el porcentaje de tamaño (scale), escala desde su centro */
+      #scaler {
+        position: relative;
+        z-index: 20;
+        width: 100%;
+        display: flex;
+        justify-content: center;
+      }
+
+      /* Los iconos flotantes ocupan todo el escenario (rotan, pero no se escalan) */
+      #floating-icons-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      .no-connection-container {
+        text-align: center;
+        max-width: 90%;
+        width: 500px;
+        z-index: 20;
+        /* Fondo sólido semitransparente: sin backdrop-filter (pesado en TV box) */
+        background: rgba(30, 40, 100, 0.85);
+        padding: 40px 30px;
+        border-radius: 20px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(100, 150, 255, 0.3);
+        will-change: transform;
+        transition: transform 40s linear;
+      }
+
+      .logo {
+        width: 100px;
+        height: 100px;
+        margin: 0 auto 25px;
+        border-radius: 20px;
+        background: linear-gradient(45deg, var(--logo-a), var(--logo-b));
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 8px 20px rgba(244, 67, 54, 0.4);
+        will-change: transform;
+        animation: pulse 2s ease-in-out infinite alternate;
+      }
+
+      .logo-icon {
+        font-size: 40px;
+        font-weight: bold;
+      }
+
+      h1 {
+        font-size: 2.8rem;
+        margin-bottom: 5px;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+      }
+
+      .version {
+        font-size: 1.1rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-bottom: 10px;
+        font-style: italic;
+      }
+
+      .website,
+      .id-Number {
+        font-size: 1.2rem;
+        color: var(--accent);
+        margin-bottom: 10px;
+        font-weight: 300;
+        letter-spacing: 1px;
+      }
+
+      .email-contact {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 20px;
+      }
+
+      .message {
+        font-size: 1.4rem;
+        color: rgba(255, 255, 255, 0.9);
+        margin-bottom: 30px;
+        line-height: 1.6;
+      }
+
+      .connection-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 25px;
+        background: rgba(244, 67, 54, 0.2);
+        border-radius: 50px;
+        margin: 20px 0;
+        border: 1px solid rgba(244, 67, 54, 0.5);
+        font-size: 1.1rem;
+      }
+
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        background-color: #f44336;
+        border-radius: 50%;
+        margin-right: 10px;
+        animation: blink 1.5s infinite;
+      }
+
+      .connection-status.checking {
+        background: rgba(255, 193, 7, 0.15);
+        border-color: rgba(255, 193, 7, 0.5);
+      }
+      .connection-status.checking .status-dot {
+        background-color: #ffc107;
+      }
+      .connection-status.online {
+        background: rgba(76, 175, 80, 0.2);
+        border-color: rgba(76, 175, 80, 0.5);
+      }
+      .connection-status.online .status-dot {
+        background-color: #4caf50;
+      }
+
+      .instructions {
+        margin-top: 30px;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        text-align: left;
+        font-size: 1.1rem;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      .instruction-item {
+        margin: 12px 0;
+        display: flex;
+        align-items: center;
+      }
+
+      .instruction-icon {
+        margin-right: 12px;
+        width: 22px;
+        height: 22px;
+        min-width: 22px;
+        stroke: #4fc3f7;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .contact-info {
+        margin-top: 20px;
+        padding: 15px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        font-size: 0.9em;
+        color: rgba(255, 255, 255, 0.7);
+        text-align: center;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      /* Iconos flotantes de conexión (SVG inline, mismo tipo que fingerprint.html).
+         La opacidad de cada icono la fija el JS (0.3 a 0.7) */
+      .floating-icon {
+        position: absolute;
+        width: 34px;
+        height: 34px;
+        z-index: 1;
+        will-change: transform;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .icon-1 { color: #ff9966; }
+      .icon-2 { color: #66ff99; }
+      .icon-3 { color: #6699ff; }
+      .icon-4 { color: #ff66cc; }
+      .icon-5 { color: #ffcc66; }
+      .icon-6 { color: #66ffff; }
+
+      /* Variación de color de fondo (anti-quemado): capa con opacidad animada.
+         Antes se reescribía el degradado del body cada 5 s por JS, lo que repintaba
+         toda la pantalla; animar opacity solo recompone la capa en la GPU. */
+      body::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, hsl(220, 70%, 15%) 0%, hsl(260, 65%, 18%) 100%);
+        opacity: 0;
+        animation: bgShift 30s ease-in-out infinite alternate;
+        pointer-events: none;
+      }
+
+      @keyframes bgShift {
+        0% { opacity: 0; }
+        100% { opacity: 1; }
+      }
+
+      /* Keyframes */
+      @keyframes float {
+        0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+        25% { transform: translate3d(20px, 30px, 0) rotate(5deg); }
+        50% { transform: translate3d(-15px, 20px, 0) rotate(-5deg); }
+        75% { transform: translate3d(10px, -10px, 0) rotate(3deg); }
+      }
+
+      @keyframes float2 {
+        0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+        33% { transform: translate3d(30px, -20px, 0) rotate(-8deg); }
+        66% { transform: translate3d(-20px, 25px, 0) rotate(8deg); }
+      }
+
+      @keyframes float3 {
+        0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+        20% { transform: translate3d(-25px, 15px, 0) rotate(-3deg); }
+        40% { transform: translate3d(20px, -25px, 0) rotate(3deg); }
+        60% { transform: translate3d(-15px, -20px, 0) rotate(-5deg); }
+        80% { transform: translate3d(25px, 10px, 0) rotate(5deg); }
+      }
+
+      @keyframes pulse {
+        0%   { transform: scale(1); opacity: 0.85; }
+        100% { transform: scale(1.08); opacity: 1; }
+      }
+
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+      }
+
+      @media (min-width: 1200px) {
+        .no-connection-container { width: 600px; padding: 50px 40px; }
+        h1 { font-size: 3.5rem; }
+        .version { font-size: 1.3rem; }
+        .website { font-size: 1.4rem; }
+        .email-contact { font-size: 1.2rem; }
+        .message { font-size: 1.6rem; }
+        .instructions { font-size: 1.2rem; }
+      }
+
+      @media (max-width: 768px) {
+        .no-connection-container { padding: 30px 20px; }
+        h1 { font-size: 2.2rem; }
+        .version { font-size: 0.9rem; }
+        .website { font-size: 1rem; }
+        .email-contact { font-size: 0.9rem; }
+        .message { font-size: 1.2rem; }
+        .instructions { font-size: 1rem; }
+        .logo { width: 80px; height: 80px; }
+        .logo-icon { font-size: 32px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="dimmer" id="dimmer"></div>
+    <div id="stage">
+    <div id="floating-icons-container"></div>
+    <div id="scaler">
+
+    <div class="no-connection-container">
+      <div class="logo">
+        <div class="logo-icon">SP</div>
+      </div>
+
+      <h1>Smart Pizarra</h1>
+
+      <div class="version" id="versionText"></div>
+      <div class="website" id="websiteUrl"></div>
+      <div class="email-contact" id="emailContact"></div>
+      <div class="id-Number" id="idNumber"></div>
+
+      <div class="message">
+        No se ha detectado una conexión a internet activa.<br />
+        Algunas funciones pueden estar limitadas.
+      </div>
+
+      <div class="connection-status checking" id="connectionStatus">
+        <div class="status-dot"></div>
+        <span id="statusText">VERIFICANDO CONEXIÓN…</span>
+      </div>
+
+      <div class="instructions">
+        <div class="instruction-item">
+          <svg class="instruction-icon" viewBox="0 0 24 24">
+            <path d="M2 8.8a15 15 0 0 1 20 0M5 12.5a10.5 10.5 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0" />
+            <circle cx="12" cy="19.5" r="1" />
+          </svg>
+          <span>Verifica que el Wi-Fi esté activado y conectado a una red.</span>
+        </div>
+
+        <div class="instruction-item">
+          <svg class="instruction-icon" viewBox="0 0 24 24">
+            <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" />
+          </svg>
+          <span>Asegúrate de que el cable de red esté bien conectado.</span>
+        </div>
+
+        <div class="instruction-item">
+          <svg class="instruction-icon" viewBox="0 0 24 24">
+            <path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0" />
+          </svg>
+          <span>Intenta reiniciar tu router y tu dispositivo.</span>
+        </div>
+
+        <div class="instruction-item">
+          <svg class="instruction-icon" viewBox="0 0 24 24">
+            <path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" />
+          </svg>
+          <span>La aplicación intentará reconectar automáticamente.</span>
+        </div>
+      </div>
+
+      <div class="contact-info">
+        © 2026 Smart Pizarra. Todos los derechos reservados.
+      </div>
+    </div>
+    </div></div>
+
+    <script>
+      // Envío de mensajes a Kodular / AppInventor
+      function sendToAppInventor(message) {
+        try {
+          if (typeof window.AppInventor !== "undefined") {
+            window.AppInventor.setWebViewString(message);
+          } else if (window.android && window.android.onReceiveValue) {
+            window.android.onReceiveValue(message);
+          } else if (window.androidInterface) {
+            window.androidInterface.onReceiveValue(message);
+          } else {
+            window.postMessage(message, "*");
+          }
+        } catch (e) {
+          console.log("Error enviando mensaje:", e);
+        }
+        console.log("Enviado a AppInventor:", message);
+      }
+
+      // Configuración de la verificación de internet
+      var CONNECTION_CONFIG = {
+        // Cada endpoint responde con un JSON conocido (y con CORS), que se LEE y se VALIDA.
+        // Así un portal cautivo, el router o un DNS local que respondan con su propia
+        // página NO cuentan como internet. Los endpoints con IP (1.1.1.1 / 8.8.8.8)
+        // no dependen del DNS local. Con que UNO sea válido, hay internet.
+        endpoints: [
+          { url: "https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json", type: "dns" },
+          { url: "https://8.8.8.8/resolve?name=example.com&type=A", type: "dns" },
+          { url: "https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json", type: "dns" },
+          { url: "https://dns.google/resolve?name=example.com&type=A", type: "dns" },
+          { url: "https://api.ipify.org/?format=json", type: "ip" },
+        ],
+        timeoutMs: 5000,          // tiempo máximo de espera por verificación
+        onlineIntervalMs: 30000,  // frecuencia de verificación cuando hay internet
+        offlineIntervalMs: 5000,  // frecuencia inicial cuando no hay internet
+        maxOfflineIntervalMs: 15000, // tope del retroceso (backoff) sin internet
+        retryIntervalMs: 3000,    // reintento rápido tras un fallo estando online
+        failuresToOffline: 2,     // fallos seguidos para declarar "offline"
+        successesToOnline: 1,     // éxitos seguidos para declarar "online"
+      };
+
+      // Comprueba que el contenido recibido sea realmente el esperado del servidor de internet.
+      function validateResponse(type, text) {
+        try {
+          var data = JSON.parse(text);
+          if (type === "dns") {
+            return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+          }
+          if (type === "ip") {
+            return !!data && typeof data.ip === "string" && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      // Prueba un endpoint: true solo si respondió 200 Y el contenido es el esperado.
+      function pingEndpoint(ep, timeoutMs) {
+        return new Promise(function (resolve) {
+          var done = false;
+          var xhr = null;
+          var timer = null;
+
+          function finish(ok) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            if (!ok && xhr) {
+              try { xhr.abort(); } catch (e) {}
+            }
+            resolve(ok);
+          }
+
+          timer = setTimeout(function () { finish(false); }, timeoutMs);
+
+          try {
+            var sep = ep.url.indexOf("?") === -1 ? "?" : "&";
+            // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+            var pad = Math.random().toString(36).slice(2, 12);
+            xhr = new XMLHttpRequest();
+            xhr.open("GET", ep.url + sep + "random_padding=" + pad, true);
+            xhr.timeout = timeoutMs;
+            if (ep.type === "dns") xhr.setRequestHeader("Accept", "application/dns-json");
+            xhr.onload = function () {
+              finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+            };
+            xhr.onerror = function () { finish(false); };
+            xhr.ontimeout = function () { finish(false); };
+            xhr.onabort = function () { finish(false); };
+            xhr.send();
+          } catch (e) {
+            finish(false);
+          }
+        });
+      }
+
+      // Prueba todos los endpoints en paralelo; basta con que uno sea válido.
+      function probeInternet() {
+        var eps = CONNECTION_CONFIG.endpoints;
+        return new Promise(function (resolve) {
+          var pending = eps.length;
+          var resolved = false;
+          if (!pending) {
+            resolve({ ok: false, url: "" });
+            return;
+          }
+          eps.forEach(function (ep) {
+            pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+              if (resolved) return;
+              if (ok) {
+                resolved = true;
+                resolve({ ok: true, url: ep.url });
+              } else if (--pending === 0) {
+                resolved = true;
+                resolve({ ok: false, url: "" });
+              }
+            });
+          });
+        });
+      }
+
+      // ===== ORIENTACIÓN Y ESCALA (rotar y escalar el contenido) =====
+      var LAYOUT_CONFIG = {
+        allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
+        defaultOrientation: 0,  // rotación inicial
+        defaultScale: 100,      // tamaño inicial en porcentaje
+        minScale: 10,           // porcentaje mínimo aceptado
+        maxScale: 300,          // porcentaje máximo aceptado
+      };
+
+      // Cómo funciona la rotación:
+      //  - #stage se gira con CSS transform alrededor de su esquina superior
+      //    izquierda y luego se desplaza (translate) para volver a cubrir la pantalla.
+      //  - Con 90° y 270° el escenario "se acuesta": ancho y alto se intercambian.
+      //  - #scaler escala el contenido desde su centro.
+      var layoutManager = {
+        stage: null,
+        scaler: null,
+        orientation: LAYOUT_CONFIG.defaultOrientation,
+        scale: LAYOUT_CONFIG.defaultScale,
+
+        init: function () {
+          var self = this;
+          this._ensureElements();
+          this.apply();
+          var reapply = function () { self.apply(); };
+          window.addEventListener("resize", reapply);
+          window.addEventListener("orientationchange", reapply);
+        },
+
+        _ensureElements: function () {
+          if (!this.stage) this.stage = document.getElementById("stage");
+          if (!this.scaler) this.scaler = document.getElementById("scaler");
+          return !!(this.stage && this.scaler);
+        },
+
+        // Acepta números o textos numéricos. 360 = 0 y los negativos se
+        // normalizan (-90 equivale a 270). Devuelve true si cambió.
+        setOrientation: function (value) {
+          if (value === undefined || value === null) return false;
+          var degrees = parseInt(value, 10);
+          if (isNaN(degrees)) return false;
+          degrees = ((degrees % 360) + 360) % 360;
+          if (LAYOUT_CONFIG.allowedOrientations.indexOf(degrees) === -1) return false;
+          this.orientation = degrees;
+          return true;
+        },
+
+        // Porcentaje limitado entre minScale y maxScale. Devuelve true si cambió.
+        setScale: function (value) {
+          if (value === undefined || value === null) return false;
+          var percent = parseFloat(value);
+          if (!isFinite(percent) || percent <= 0) return false;
+          this.scale = Math.min(LAYOUT_CONFIG.maxScale, Math.max(LAYOUT_CONFIG.minScale, percent));
+          return true;
+        },
+
+        // Aplica al HTML la orientación y el tamaño actuales.
+        apply: function () {
+          if (!this._ensureElements()) return;
+
+          var width = window.innerWidth || document.documentElement.clientWidth;
+          var height = window.innerHeight || document.documentElement.clientHeight;
+
+          var stageWidth = width;
+          var stageHeight = height;
+          var transform = "none";
+
+          if (this.orientation === 90) {
+            stageWidth = height;
+            stageHeight = width;
+            transform = "translate(" + width + "px, 0px) rotate(90deg)";
+          } else if (this.orientation === 180) {
+            transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+          } else if (this.orientation === 270) {
+            stageWidth = height;
+            stageHeight = width;
+            transform = "translate(0px, " + height + "px) rotate(270deg)";
+          }
+
+          this.stage.style.width = stageWidth + "px";
+          this.stage.style.height = stageHeight + "px";
+          this._setTransform(this.stage, transform, "0 0");
+          this._setTransform(this.scaler, "scale(" + this.scale / 100 + ")", "50% 50%");
+        },
+
+        _setTransform: function (element, value, origin) {
+          element.style.transformOrigin = origin;
+          element.style.transform = value;
+        },
+      };
+
+      var noConnectionScreen = {
+        isInitialized: false,
+        status: "unknown", // "unknown" | "online" | "offline"
+        failures: 0,
+        successes: 0,
+        currentCheck: null,
+        pendingImmediate: false, // true si una verificación manual espera el resultado en curso
+        timer: null,
+        offlineDelay: CONNECTION_CONFIG.offlineIntervalMs,
+        lastLatency: 0,
+        reportCount: 0, // cantidad de mensajes de estado enviados (evita duplicados)
+
+        init: function () {
+          if (this.isInitialized) return;
+          var self = this;
+
+          sendToAppInventor(
+            JSON.stringify({
+              origin: "connection_status",
+              action: "info",
+              status: "",
+              internetStatus: "",
+            }),
+          );
+
+          this.setupConnectionListeners();
+          this.runCheck("init", false);
+
+          this.isInitialized = true;
+          console.log("Página de Sin Conexión inicializada");
+        },
+
+        // Ejecuta una verificación real (evita solapes). Devuelve Promise<boolean>.
+        runCheck: function (reason, forceReport) {
+          var self = this;
+          if (this.currentCheck) {
+            if (forceReport) {
+              this.pendingImmediate = true;
+              var countBefore = this.reportCount;
+              this.currentCheck.then(function () {
+                if (self.reportCount === countBefore) self.reportStatus();
+              });
+            }
+            return this.currentCheck;
+          }
+
+          clearTimeout(this.timer);
+          var started = Date.now();
+          var reportsBefore = this.reportCount;
+
+          this.currentCheck = probeInternet().then(function (res) {
+            self.currentCheck = null;
+            self.lastLatency = Date.now() - started;
+            // Una verificación manual refleja el resultado real al instante (sin histéresis)
+            var immediate = !!forceReport || self.pendingImmediate;
+            self.pendingImmediate = false;
+            self.applyResult(res.ok, immediate);
+            // Si el estado cambió, applyResult ya lo reportó; si no, se reporta aquí
+            if (forceReport && self.reportCount === reportsBefore) self.reportStatus();
+            self.scheduleNext();
+            return self.status === "online";
+          });
+
+          return this.currentCheck;
+        },
+
+        // Histéresis: evita cambios de estado por un fallo aislado.
+        applyResult: function (ok, immediate) {
+          var prev = this.status;
+
+          if (ok) {
+            this.failures = 0;
+            this.successes++;
+            if (
+              prev === "unknown" ||
+              immediate ||
+              (prev !== "online" &&
+                this.successes >= CONNECTION_CONFIG.successesToOnline)
+            ) {
+              this.setStatus("online");
+            }
+          } else {
+            this.successes = 0;
+            this.failures++;
+            if (
+              prev === "unknown" ||
+              immediate ||
+              (prev === "online" &&
+                this.failures >= CONNECTION_CONFIG.failuresToOffline)
+            ) {
+              this.setStatus("offline");
+            }
+          }
+        },
+
+        setStatus: function (newStatus) {
+          if (this.status === newStatus) return;
+          this.status = newStatus;
+          if (newStatus === "offline") {
+            this.offlineDelay = CONNECTION_CONFIG.offlineIntervalMs;
+          }
+          this.updateUI();
+          this.reportStatus();
+          console.log("Estado de conexión:", newStatus);
+        },
+
+        // Envía el estado actual a Kodular / AppInventor.
+        reportStatus: function () {
+          if (this.status === "unknown") return;
+          this.reportCount++;
+          sendToAppInventor(
+            JSON.stringify({
+              origin: "connection_status",
+              action: "connection",
+              internetStatus: this.status, // "online" | "offline": estado REAL de internet
+              status: this.status,         // igual que internetStatus (compatibilidad)
+              latency: this.lastLatency,
+              localNetwork: navigator.onLine, // true = hay red local (Wi-Fi/cable), aunque no haya internet
+              checkedAt: new Date().toISOString(),
+            }),
+          );
+        },
+
+        updateUI: function () {
+          var box = document.getElementById("connectionStatus");
+          var text = document.getElementById("statusText");
+          if (!box || !text) return;
+
+          box.className = "connection-status " + (this.status === "online" ? "online" : this.status === "offline" ? "" : "checking");
+          if (this.status === "online") {
+            text.textContent = "CONEXIÓN RECUPERADA";
+          } else if (this.status === "offline") {
+            text.textContent = "SIN CONEXIÓN A INTERNET";
+          } else {
+            text.textContent = "VERIFICANDO CONEXIÓN…";
+          }
+        },
+
+        // Programa la próxima verificación según el estado.
+        scheduleNext: function () {
+          var self = this;
+          var delay;
+
+          if (this.status === "online") {
+            delay =
+              this.failures > 0
+                ? CONNECTION_CONFIG.retryIntervalMs
+                : CONNECTION_CONFIG.onlineIntervalMs;
+          } else {
+            delay = this.offlineDelay;
+            this.offlineDelay = Math.min(
+              Math.round(this.offlineDelay * 1.5),
+              CONNECTION_CONFIG.maxOfflineIntervalMs,
+            );
+          }
+
+          clearTimeout(this.timer);
+          this.timer = setTimeout(function () {
+            self.runCheck("timer", false);
+          }, delay);
+        },
+
+        // Compatibilidad: verificación manual con reporte forzado.
+        checkInternetConnection: function () {
+          this.runCheck("manual", true);
+          return this.status === "online";
+        },
+
+        setupConnectionListeners: function () {
+          var self = this;
+
+          // Los eventos del navegador solo disparan una verificación real.
+          window.addEventListener("online", function () {
+            console.log("Evento online del navegador");
+            self.offlineDelay = CONNECTION_CONFIG.offlineIntervalMs;
+            self.runCheck("online-event", false);
+          });
+
+          window.addEventListener("offline", function () {
+            console.log("Evento offline del navegador");
+            self.runCheck("offline-event", false);
+          });
+
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) self.runCheck("visible", false);
+          });
+
+          if (navigator.connection && navigator.connection.addEventListener) {
+            navigator.connection.addEventListener("change", function () {
+              self.runCheck("connection-change", false);
+            });
+          }
+        },
+
+        updateData: function (jsonData) {
+          try {
+            var data =
+              typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
+
+            // Rotación y tamaño (opcionales): orientation 0/90/180/270, scale 10-300
+            layoutManager.setOrientation(data.orientation);
+            layoutManager.setScale(data.scale);
+            layoutManager.apply();
+
+            if (data.version) {
+              document.getElementById("versionText").textContent =
+                "Versión: " + data.version;
+            }
+            if (data.url) {
+              document.getElementById("websiteUrl").textContent = data.url;
+            }
+            if (data.email) {
+              document.getElementById("emailContact").textContent = data.email;
+            }
+            if (data.id) {
+              document.getElementById("idNumber").textContent = "ID: " + data.id;
+            }
+
+            // Opcional: [{ url: "...", type: "dns" | "ip" }, ...]
+            if (data.checkEndpoints && data.checkEndpoints.length) {
+              CONNECTION_CONFIG.endpoints = data.checkEndpoints;
+            }
+
+            console.log("Datos actualizados correctamente");
+          } catch (e) {
+            console.error("Error al procesar updateData:", e);
+            sendToAppInventor(
+              JSON.stringify({
+                origin: "connection_status",
+                action: "data_updated",
+                status: "error",
+                error: e.message,
+              }),
+            );
+          }
+        },
+      };
+
+      document.addEventListener("DOMContentLoaded", function () {
+        noConnectionScreen.init();
+
+        var container = document.getElementById("floating-icons-container");
+
+        // Iconos SVG inline de conexión (trazos de 24x24), mismo tipo que fingerprint.html:
+        // Wi-Fi, Wi-Fi sin señal, barras de señal, router, cable de red, globo,
+        // nube sin conexión, enlace roto, red/servidores, antena
+        var iconPaths = [
+          '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.5a10.5 10.5 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>',
+          '<path d="M2 2l20 20M8.5 16a5.5 5.5 0 0 1 7 0M5 12.5a10.5 10.5 0 0 1 5-2.9M2 8.8a15 15 0 0 1 4.2-2.7M14.5 9.7a10.5 10.5 0 0 1 4.5 2.8M10.7 5.1A15 15 0 0 1 22 8.8"/><circle cx="12" cy="19.5" r="1"/>',
+          '<path d="M4 20v-4M9 20v-8M14 20v-12M19 20V4"/>',
+          '<rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 17.5h.01M10 17.5h.01M7 10a7 7 0 0 1 10 0M9.5 12a3.5 3.5 0 0 1 5 0"/>',
+          '<path d="M8 2v4M16 2v4M5 6h14v6a7 7 0 0 1-14 0zM12 19v3"/>',
+          '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
+          '<path d="M2 2l20 20M17.5 19H7a5 5 0 0 1-1.5-9.8M9.5 5.4A6.5 6.5 0 0 1 18 10h.5a4.5 4.5 0 0 1 3 7.9"/>',
+          '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 4 8M8 12h3M3 3l18 18"/>',
+          '<rect x="9" y="3" width="6" height="5"/><rect x="2" y="16" width="6" height="5"/><rect x="16" y="16" width="6" height="5"/><path d="M12 8v4M5 16v-4h14v4"/>',
+          '<path d="M12 12v10M8 22h8M8.5 8.5a5 5 0 0 1 7 0M5.6 5.6a9 9 0 0 1 12.8 0"/><circle cx="12" cy="11" r="1"/>'
+        ];
+
+        var animations = ["float", "float2", "float3"];
+        var total = 12; // mismo número que fingerprint.html
+        var frag = document.createDocumentFragment();
+        var wrapper = document.createElement("div");
+
+        for (var i = 0; i < total; i++) {
+          wrapper.innerHTML =
+            '<svg class="floating-icon icon-' + ((i % 6) + 1) +
+            '" viewBox="0 0 24 24">' + iconPaths[i % iconPaths.length] + "</svg>";
+          var icon = wrapper.firstChild;
+
+          var anim = animations[Math.floor(Math.random() * animations.length)];
+          var duration = 18 + Math.random() * 25;
+          // Retraso negativo: cada icono arranca en un punto distinto de su recorrido
+          var delay = -Math.random() * duration;
+
+          icon.style.left = Math.random() * 95 + "%";
+          icon.style.top = Math.random() * 95 + "%";
+          icon.style.opacity = (0.3 + Math.random() * 0.4).toFixed(2);
+          icon.style.animation = anim + " " + duration.toFixed(1) + "s ease-in-out " +
+            delay.toFixed(1) + "s infinite";
+
+          frag.appendChild(icon);
+        }
+        container.appendChild(frag);
+
+        // El cambio sutil de color de fondo (anti-quemado) ahora es CSS puro: ver body::before
+
+        // ===== PROTECCIÓN ANTI-QUEMADO DE PANTALLA =====
+        // Ajusta estos valores según tu pantalla:
+        var MAX_X = 120;          // desplazamiento horizontal máximo (px)
+        var MAX_Y = 80;           // desplazamiento vertical máximo (px)
+        var DRIFT_MS = 40000;     // cada cuánto se elige nueva posición (= duración de la transición CSS)
+        var COLOR_MS = 60000;     // cada cuánto cambian los colores de acento
+        var DIM_MS = 300000;      // cada cuánto alterna el nivel de atenuación (5 min)
+        var DIM_LOW = 0.15;       // atenuación mínima
+        var DIM_HIGH = 0.35;      // atenuación máxima
+
+        // 1) Desplazamiento continuo del contenido (pixel shift)
+        var box = document.querySelector(".no-connection-container");
+        function drift() {
+          var x = (Math.random() * 2 - 1) * MAX_X;
+          var y = (Math.random() * 2 - 1) * MAX_Y;
+          var t = "translate3d(" + x.toFixed(1) + "px," + y.toFixed(1) + "px,0)";
+          box.style.transform = t;
+        }
+        drift();
+        setInterval(drift, DRIFT_MS);
+
+        // 2) Rotación lenta de colores de acento y logo
+        var colorStep = 0;
+        function shiftColors() {
+          colorStep = (colorStep + 15) % 360;
+          var root = document.documentElement.style;
+          root.setProperty("--accent", "hsl(" + ((187 + colorStep) % 360) + ", 100%, 38%)");
+          root.setProperty("--logo-a", "hsl(" + ((4 + colorStep) % 360) + ", 60%, 42%)");
+          root.setProperty("--logo-b", "hsl(" + ((33 + colorStep) % 360) + ", 70%, 46%)");
+        }
+        setInterval(shiftColors, COLOR_MS);
+
+        // 3) Atenuación variable del brillo
+        var dimmer = document.getElementById("dimmer");
+        var dimHigh = false;
+        setInterval(function () {
+          dimHigh = !dimHigh;
+          dimmer.style.opacity = dimHigh ? DIM_HIGH : DIM_LOW;
+        }, DIM_MS);
+      });
+
+      // Métodos expuestos para AppInventor / Kodular
+      window.updateData = function (jsonData) {
+        noConnectionScreen.updateData(jsonData);
+      };
+
+      // Devuelve el último estado conocido y fuerza una verificación real
+      // cuyo resultado se envía a la app como mensaje JSON.
+      window.checkConnection = function () {
+        return noConnectionScreen.checkInternetConnection();
+      };
+
+      // Versión asíncrona: devuelve Promise<boolean> con el resultado real.
+      window.checkConnectionAsync = function () {
+        return noConnectionScreen.runCheck("manual", true);
+      };
+
+      // Aplica la orientación y escala iniciales (después cambian con updateData)
+      layoutManager.init();
+    </script>
+  </body>
+</html>

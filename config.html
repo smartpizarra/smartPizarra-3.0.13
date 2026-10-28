@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA DE CONFIGURACIÓN (ORIENTACIÓN Y LIGAS)
+  PARA ANDROID WEBVIEW
+=====================================================================
+
+  QUE HACE
+  Permite elegir:
+    - La orientación (0°, 90°, 180°, 270°) con la que se muestran las
+      pantallas de la app (loading.html, connection.html, fingerprint.html).
+    - Las ligas, con un selector de 4 opciones:
+        MLB        => "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"
+        NBA        => "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK"
+        NFL & NHL  => "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS"
+        NINGUNO    => "none"
+      (El selector es una fila de botones y no un <select> nativo: el
+      <select> de Android abre una ventana del sistema que no gira con
+      la página y se maneja mal con el control remoto.)
+  La página:
+    - Lee la orientación y las ligas guardadas al arrancar.
+    - Gira la propia pantalla en vivo al elegir una orientación, para
+      que el usuario vea el resultado al instante.
+    - Se ajusta sola para caber siempre en pantalla, en cualquier giro.
+    - Se maneja con el control remoto (flechas + OK), con el mouse o
+      con toques.
+    - Envía UN SOLO JSON a la app, y solo al pulsar "Salir" (mismo
+      formato que las demás pantallas). Los demás botones no envían nada.
+
+  DÓNDE SE GUARDA LA CONFIGURACIÓN
+  Al pulsar "Guardar", esta página escribe en el almacenamiento local
+  del WebView (localStorage):
+    "smartpizarra.orientation"  la orientación (0, 90, 180 o 270)
+    "smartpizarra.league"       la opción de ligas (mlb, nba, nflnhl o none)
+  Al volver a abrir esta pantalla se muestran los valores guardados.
+  Las demás pantallas (loading.html, connection.html, fingerprint.html)
+  leen la orientación de ahí al abrirse: la app NO necesita enviarles
+  la orientación por parámetro.
+  - El valor sobrevive al cierre de la app y al reinicio de la TV box.
+  - Solo se borra si se borran los datos de la app en Android.
+  - Si el WebView no permite localStorage, la pantalla muestra "No se
+    pudo guardar la configuración" y el JSON de "Salir" llega con
+    "status":"error" (ver contrato de salida).
+  La app recibe la configuración guardada en el JSON de "Salir" por si
+  quiere guardar una copia propia (por ejemplo en TinyDB), pero no es
+  obligatorio.
+
+  COMPATIBILIDAD / RENDIMIENTO (Android WebView 101 en TV box)
+  - JavaScript ES5 (var / function) + Promise: funciona en cualquier WebView.
+  - Sin librerías externas: iconos SVG escritos en el propio archivo.
+  - Sin backdrop-filter ni filter (pesados en GPU de TV box).
+
+  FLUJO GENERAL
+  1. init(): lee la orientación (0° si no hay ninguna) y las ligas
+     (NINGUNO si no hay ninguna) guardadas, las aplica, dibuja la UI y
+     pone el foco en la orientación actual. No envía nada a la app.
+  2. La app puede llamar a updateData({"version":..., ...}) para
+     mostrar sus datos (la orientación NO se recibe por parámetro).
+  3. El usuario elige otra orientación (se aplica en pantalla) y/o
+     otra opción de ligas (se muestran sus valores debajo).
+  4. "Guardar" => guarda orientación y ligas en localStorage (no envía JSON).
+  5. "Salir" => descarta lo que no se haya guardado y envía a la app
+     el ÚNICO JSON de esta pantalla, con la configuración guardada.
+     La app debe cerrar esta pantalla al recibirlo.
+  6. En paralelo se verifica internet (mismo método que las demás
+     pantallas) para que "internetStatus" del JSON de "Salir" sea real.
+
+  CONTRATO DE ENTRADA: updateData(json)
+  La app llama: updateData('{"version":"3.0.12", ... }')
+  También acepta un objeto JavaScript. Todos los campos son OPCIONALES:
+
+    version      texto    Se muestra como "Versión: <valor>"
+    url          texto    Se muestra tal cual
+    email        texto    Se muestra tal cual
+
+  Un campo que no llega, o llega vacío o inválido, se ignora.
+  Si llega "orientation" también se ignora: la orientación solo se
+  cambia en esta pantalla.
+
+  CONTRATO DE SALIDA: UN SOLO mensaje, al pulsar "Salir"
+  Ningún otro botón ni evento envía JSON (ni al abrir, ni al cambiar
+  la orientación, ni al guardar, ni cuando cambia internet).
+  Mismo formato que las demás pantallas:
+
+      {"origin":"config","action":"exit","status":"saved",
+       "internetStatus":"online","orientation":90,
+       "league":"MLB","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"}
+
+    status          "saved"     => en esta visita se guardó la configuración.
+                    "unchanged" => no se guardó nada en esta visita.
+                    "error"     => el último intento de guardar falló
+                                   (localStorage no disponible).
+    internetStatus  "online" | "offline" ("" si la primera verificación
+                    aún no terminó).
+    orientation     Orientación GUARDADA (la que usarán las demás pantallas).
+    league          Opción de ligas GUARDADA: "MLB", "NBA", "NFL & NHL"
+                    o "NINGUNO".
+    leagues         Valores de esa opción, separados por comas
+                    (con NINGUNO vale "none").
+    Lo que se cambió sin pulsar "Guardar" se descarta.
+
+  FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
+    updateData(json)        Ver "contrato de entrada".
+    getConfig()             Devuelve un texto JSON con la configuración
+                            en pantalla: {"orientation":90,"league":"MLB",
+                            "leagues":"LIDOM,MLB,..."}
+    saveConfig()            Igual que pulsar "Guardar" (no envía JSON).
+    exitConfig()            Igual que pulsar "Salir" (envía el JSON).
+    checkConnection()       Fuerza una verificación de internet (no envía
+                            JSON). Devuelve el último estado conocido.
+    checkConnectionAsync()  Igual, pero devuelve Promise<boolean>.
+
+  TECLADO Y CONTROL REMOTO (la pantalla está pensada para usarse con flechas)
+    Flechas            Pensado para una TV montada GIRADA físicamente (el
+                       texto se lee derecho). Las flechas siguen al contenido
+                       tal como se lee, en cualquier orientación:
+                         → botón de la derecha    ← botón de la izquierda
+                         ↑ fila de arriba         ↓ fila de abajo
+                       Si no hay ningún botón en esa dirección, el foco se queda.
+                       (En un monitor de PC SIN girar, con la página a 90°,
+                       las flechas parecerán "giradas": es lo esperado.)
+    OK / Enter / Espacio  Pulsan el botón con foco. Mantenerlas pulsadas
+                       no repite la acción.
+    1, 2, 3, 4         Eligen 0°, 90°, 180° y 270° directamente.
+    Esc                Lleva el foco a "Salir" (para salir hay que pulsar OK).
+    El foco nunca se pierde: si se hace clic en el fondo o se vuelve a la
+    app, se recupera en el botón de la orientación actual.
+
+  ARQUITECTURA (bloque <script>, en este orden)
+    1. Configuración        Orientaciones, valores por defecto y tiempos.
+    2. Estado               Valor guardado, valor en pantalla, etc.
+    3. Comunicación         sendToAppInventor(), send() (solo los usa "Salir").
+    4. Orientación          layoutManager (gira la página y la ajusta para
+                            que siempre quepa en pantalla).
+    5. Configuración        setOrientation(), saveConfig(), exitConfig().
+    6. UI                   render(): refleja el estado en los botones.
+    7. Teclado              Búsqueda del botón vecino en el contenido
+                            (findNeighbor) y atajos (onKeyDown).
+    8. Conexión             Verificación de internet (igual que fingerprint).
+    9. API pública          Funciones window.* para la app.
+   10. Inicio               init().
+
+  COMO MODIFICAR (guía rápida)
+    Orientaciones disponibles
+      => ORIENTATIONS (sección 1) y los botones .orient del HTML
+         (cada botón lleva su valor en data-orientation).
+    Orientación o ligas si nunca se guardó nada
+      => DEFAULT_CONFIG (sección 1).
+    Opciones de ligas o sus valores
+      => LEAGUE_OPTIONS (sección 1) y los botones .league del HTML
+         (cada botón lleva su clave en data-league).
+    Agregar un botón nuevo
+      => ponerlo en el HTML con class="btn" y añadirlo a el.focusables
+         en init(). Las flechas lo encuentran solas por su posición.
+    Teclas y atajos
+      => onKeyDown() (sección 7).
+    Cómo eligen las flechas el siguiente botón
+      => findNeighbor() (sección 7).
+    Nombre de la clave donde se guarda la orientación
+      => ORIENTATION_KEY (sección 1). Debe ser IGUAL en los 4 archivos.
+    Mensaje que se envía a la app al salir
+      => exitConfig().
+    Textos que ve el usuario
+      => HTML y la función render().
+    Colores, tamaños o estilo del foco
+      => bloque <style> (cada sección está numerada y comentada).
+
+  COMO PROBAR EN UN NAVEGADOR DE PC
+    Abrir el archivo en Chrome, abrir la consola (F12) y escribir:
+      window.AppInventor = { setWebViewString: function (m) { console.log(m); } };
+      updateData({ version: "3.0.12" });
+    Luego usar las flechas del teclado y Enter como si fuera el control
+    remoto, o hacer clic en los botones. El JSON aparece en la consola
+    solo al pulsar "Salir". Tras "Guardar", abrir
+    loading.html, connection.html o fingerprint.html en el mismo
+    navegador: se verán con la orientación guardada.
+    Para ver o borrar el valor guardado (consola):
+      localStorage.getItem("smartpizarra.orientation")
+      localStorage.removeItem("smartpizarra.orientation")
+      localStorage.getItem("smartpizarra.league")
+      localStorage.removeItem("smartpizarra.league")
+
+  ARCHIVOS RELACIONADOS
+    loading.html, connection.html, fingerprint.html
+      Leen la orientación guardada (misma clave ORIENTATION_KEY) al
+      abrirse y la aplican con el mismo layoutManager (0/90/180/270).
+=====================================================================
+-->
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Configuración - Smart Pizarra</title>
+    <style>
+        /* ==============================================================
+           1. BASE: reinicio de estilos, colores globales y fondo
+           ============================================================== */
+
+        /* Quita márgenes por defecto y hace que el padding cuente dentro del ancho */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent; /* sin resaltado azul al tocar */
+        }
+
+        :root {
+            --accent: #00e5ff;          /* color de selección y foco */
+            --accent-soft: rgba(0, 229, 255, 0.18);
+            --ok: #4CAF50;              /* "guardado" */
+            --warn: #ff9800;            /* "sin guardar" */
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a237e;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a237e 0%, #311b92 100%);
+            color: #e8eaf6;
+            position: relative;
+            user-select: none;          /* evita seleccionar texto por accidente */
+        }
+
+        /* ==============================================================
+           2. ESCENARIO Y AJUSTE A PANTALLA (rotación)
+           Los dimensiona y transforma layoutManager desde JavaScript.
+           ============================================================== */
+
+        /* #stage: se rota 0/90/180/270. Su ancho y alto los fija el JS
+           (se intercambian al rotar 90 o 270) */
+        #stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* #scaler: el JS lo reduce lo justo para que la tarjeta quepa siempre
+           en pantalla (en cualquier orientación). Escala desde su centro. */
+        #scaler {
+            display: flex;
+            justify-content: center;
+        }
+
+        /* ==============================================================
+           3. TARJETA PRINCIPAL Y CABECERA
+           ============================================================== */
+        .config-container {
+            width: 640px;
+            background: rgba(30, 40, 100, 0.88);
+            padding: 32px 36px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(100, 150, 255, 0.3);
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .logo {
+            width: 64px;
+            height: 64px;
+            min-width: 64px;
+            margin-right: 18px;
+            border-radius: 14px;
+            background: linear-gradient(45deg, #2196f3, #21cbf3);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 26px;
+            font-weight: bold;
+            color: #fff;
+            box-shadow: 0 8px 20px rgba(33, 150, 243, 0.4);
+        }
+
+        .header-text { flex: 1; }
+
+        h1 {
+            font-size: 1.9rem;
+            line-height: 1.2;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Línea con versión · sitio web · email (datos de updateData) */
+        .app-info {
+            font-size: 0.95rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-top: 4px;
+        }
+        .app-info span:empty { display: none; }   /* campo sin datos: no se muestra */
+        .app-info .website { color: hsl(187, 100%, 38%); }
+
+        /* Indicador de internet (punto + texto) */
+        .net {
+            display: flex;
+            align-items: center;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.7);
+            white-space: nowrap;
+        }
+        .net-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 6px;
+            background: #ffc107;        /* verificando */
+        }
+        .net.online .net-dot { background: var(--ok); }
+        .net.offline .net-dot { background: #f44336; }
+
+        /* ==============================================================
+           4. SECCIONES Y BOTONES
+           ============================================================== */
+        .section { margin-bottom: 22px; }
+
+        .section-title {
+            font-size: 1.05rem;
+            color: rgba(255, 255, 255, 0.75);
+            margin-bottom: 10px;
+            letter-spacing: 0.5px;
+        }
+
+        /* Fila de botones repartidos a lo ancho */
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+        .row > .btn { flex: 1; }
+
+        /* Botón base (orientación y acciones) */
+        .btn {
+            font: inherit;
+            color: inherit;
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 12px 10px;
+            font-size: 1.05rem;
+            cursor: pointer;
+            outline: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+        }
+
+        /* Opción elegida (orientación actual) */
+        .btn.selected {
+            background: var(--accent-soft);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        /* FOCO: muy visible para manejar con el control remoto desde el sofá */
+        .btn:focus {
+            border-color: #fff;
+            box-shadow: 0 0 0 4px var(--accent), 0 0 18px rgba(0, 229, 255, 0.6);
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        /* Flecha SVG de los botones de orientación (el HTML la gira con style:
+           0° => ↑, 90° => →, 180° => ↓, 270° => ←, tal como se lee el contenido). */
+        .orient-icon {
+            width: 30px;
+            height: 30px;
+            margin-bottom: 4px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .orient-label { font-size: 0.8rem; color: rgba(255, 255, 255, 0.6); }
+
+        /* Selector de ligas: 4 opciones en fila (funciona como un <select>,
+           pero gira con la página y se maneja con las flechas) */
+        .league { font-size: 1rem; font-weight: bold; padding: 14px 6px; }
+
+        /* Valores de la opción elegida (los que viajan en el JSON) */
+        .league-values {
+            margin-top: 8px;
+            min-height: 1.4em;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+            word-break: break-word;
+        }
+        .league-values b { color: var(--accent); font-weight: normal; }
+
+        /* ==============================================================
+           5. ACCIONES Y MENSAJE DE ESTADO
+           ============================================================== */
+        .actions { margin-top: 6px; }
+
+        .btn.primary {
+            background: rgba(76, 175, 80, 0.25);
+            border-color: rgba(76, 175, 80, 0.7);
+        }
+
+        /* Botón "Salir": rojizo para distinguirlo de las demás acciones */
+        .btn.exit {
+            background: rgba(244, 67, 54, 0.2);
+            border-color: rgba(244, 67, 54, 0.6);
+        }
+
+        .status {
+            margin-top: 16px;
+            min-height: 1.5em;
+            text-align: center;
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .status.dirty { color: var(--warn); }   /* hay cambios sin guardar */
+        .status.saved { color: var(--ok); }     /* configuración guardada */
+
+        .hint {
+            margin-top: 6px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.45);
+        }
+    </style>
+</head>
+<body>
+    <!-- #stage  => se rota según la orientación elegida (vista previa en vivo)
+         #scaler => ajusta la tarjeta para que siempre quepa en pantalla -->
+    <div id="stage"><div id="scaler">
+
+    <div class="config-container" id="configContainer">
+
+        <!-- CABECERA: logo, título, datos de la app e indicador de internet -->
+        <div class="header">
+            <div class="logo">SP</div>
+            <div class="header-text">
+                <h1>Configuración de pantalla</h1>
+                <!-- Los llena updateData(); vacíos no se muestran -->
+                <div class="app-info">
+                    <span id="versionText"></span>
+                    <span class="website" id="websiteUrl"></span>
+                    <span id="emailContact"></span>
+                </div>
+            </div>
+            <div class="net" id="netStatus">
+                <div class="net-dot"></div><span id="netText">Verificando…</span>
+            </div>
+        </div>
+
+        <!-- ORIENTACIÓN: cada botón lleva su valor en data-orientation.
+             La flecha apunta hacia donde quedará la parte superior del contenido. -->
+        <div class="section">
+            <div class="section-title">Orientación</div>
+            <div class="row" id="orientRow">
+                <button class="btn orient" data-orientation="0">
+                    <svg class="orient-icon" viewBox="0 0 24 24" style="transform: rotate(0deg)"><path d="M12 20V4M5 11l7-7 7 7" /></svg>
+                    0°<span class="orient-label">Normal</span>
+                </button>
+                <button class="btn orient" data-orientation="90">
+                    <svg class="orient-icon" viewBox="0 0 24 24" style="transform: rotate(90deg)"><path d="M12 20V4M5 11l7-7 7 7" /></svg>
+                    90°<span class="orient-label">Derecha</span>
+                </button>
+                <button class="btn orient" data-orientation="180">
+                    <svg class="orient-icon" viewBox="0 0 24 24" style="transform: rotate(180deg)"><path d="M12 20V4M5 11l7-7 7 7" /></svg>
+                    180°<span class="orient-label">Invertida</span>
+                </button>
+                <button class="btn orient" data-orientation="270">
+                    <svg class="orient-icon" viewBox="0 0 24 24" style="transform: rotate(270deg)"><path d="M12 20V4M5 11l7-7 7 7" /></svg>
+                    270°<span class="orient-label">Izquierda</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- LIGAS (selector): cada botón lleva en data-league la clave de una
+             opción de LEAGUE_OPTIONS (sección 1 del script), donde están sus valores. -->
+        <div class="section">
+            <div class="section-title">Ligas</div>
+            <div class="row" id="leagueRow">
+                <button class="btn league" data-league="mlb">MLB</button>
+                <button class="btn league" data-league="nba">NBA</button>
+                <button class="btn league" data-league="nflnhl">NFL &amp; NHL</button>
+                <button class="btn league" data-league="none">NINGUNO</button>
+            </div>
+            <!-- Valores de la opción elegida (los escribe render) -->
+            <div class="league-values" id="leagueValues"></div>
+        </div>
+
+        <!-- ACCIONES -->
+        <div class="row actions" id="actionRow">
+            <button class="btn primary" id="saveBtn">Guardar</button>
+            <!-- ÚNICO botón que envía un JSON a la app (exitConfig) -->
+            <button class="btn exit" id="exitBtn">Salir</button>
+        </div>
+
+        <!-- Mensaje de estado (lo escribe render) -->
+        <div class="status" id="statusText"></div>
+        <div class="hint">Flechas: moverse &nbsp;·&nbsp; OK / Enter: elegir &nbsp;·&nbsp; 1-4: orientación &nbsp;·&nbsp; Esc: ir a Salir</div>
+    </div>
+
+    </div></div><!-- /#scaler /#stage -->
+
+    <script>
+    // Todo el código va dentro de una función (IIFE) para no crear variables
+    // globales por accidente. Lo que la app necesita se publica en window.*
+    (function () {
+        'use strict';
+
+        /* ==================================================================
+           1. CONFIGURACIÓN (valores ajustables)
+           ================================================================== */
+
+        /** Orientaciones permitidas, en grados (mismas que las demás pantallas). */
+        var ORIENTATIONS = [0, 90, 180, 270];
+
+        /**
+         * Opciones del selector de ligas. La clave es la que lleva cada botón
+         * en data-league; "label" es el texto y "values" lo que viaja en el JSON.
+         * Para agregar una opción: añadirla aquí y un botón .league en el HTML.
+         */
+        var LEAGUE_OPTIONS = {
+            mlb:    { label: 'MLB',         values: 'LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB' },
+            nba:    { label: 'NBA',         values: 'NBA,CBK,NBAPROP,WNBA,WCBK,EUBK' },
+            nflnhl: { label: 'NFL & NHL',   values: 'NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS' },
+            none:   { label: 'NINGUNO',     values: 'none' }
+        };
+
+        /** Valores que se usan si nunca se guardó ninguno. */
+        var DEFAULT_CONFIG = { orientation: 0, league: 'none' };
+
+        /** Clave de localStorage donde se guarda la orientación.
+            Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html. */
+        var ORIENTATION_KEY = 'smartpizarra.orientation';
+
+        /** Clave de localStorage donde se guarda la opción de ligas (mlb, nba, nflnhl o none). */
+        var LEAGUE_KEY = 'smartpizarra.league';
+
+
+        /** Margen (px) que se deja alrededor de la tarjeta al ajustarla a la pantalla. */
+        var FIT_MARGIN = 24;
+
+        // Verificación de internet (mismo método que connection.html y fingerprint.html)
+        var CONNECTION_CONFIG = {
+            // Cada endpoint responde con un JSON conocido (con CORS) que se LEE y se VALIDA.
+            // Así un portal cautivo, el router o un DNS local que respondan con su propia
+            // página NO cuentan como internet. Con que UNO sea válido, hay internet.
+            endpoints: [
+                { url: 'https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://8.8.8.8/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
+                { url: 'https://dns.google/resolve?name=example.com&type=A', type: 'dns' },
+                { url: 'https://api.ipify.org/?format=json', type: 'ip' }
+            ],
+            timeoutMs: 5000,          // tiempo máximo de espera por verificación
+            onlineIntervalMs: 30000,  // frecuencia de verificación cuando hay internet
+            offlineIntervalMs: 5000,  // frecuencia de verificación cuando no hay internet
+            retryIntervalMs: 3000,    // reintento rápido tras un fallo estando online
+            failuresToOffline: 2      // fallos seguidos para declarar "offline"
+        };
+
+        /* ==================================================================
+           2. ESTADO (variables que cambian mientras corre la página)
+           ================================================================== */
+
+        /** Configuración guardada (la que se informa al salir). Se lee de localStorage en init(). */
+        var saved = { orientation: DEFAULT_CONFIG.orientation, league: DEFAULT_CONFIG.league };
+
+        /** Configuración en pantalla (la que se está editando). */
+        var current = { orientation: saved.orientation, league: saved.league };
+
+        /** true justo después de guardar (para mostrar "Configuración guardada"). */
+        var justSaved = false;
+
+        /** true si el último intento de guardar falló (localStorage no disponible). */
+        var saveError = false;
+
+        /** true si en esta visita se guardó al menos una vez con éxito (para el JSON de "Salir"). */
+        var savedThisSession = false;
+
+        var internetStatus = 'unknown';   // 'unknown' | 'online' | 'offline'
+        var currentCheck = null;          // Promise de la verificación en curso
+        var checkTimer = null;            // temporizador de la próxima verificación
+        var failures = 0;                 // fallos de verificación seguidos (histéresis)
+        var lastLatency = 0;              // ms que tardó la última verificación
+
+        // Referencias DOM cacheadas. Se llenan en init().
+        // el.focusables = todos los botones a los que se llega con las flechas.
+        var el = {};
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP (Kodular / App Inventor)
+           ================================================================== */
+
+        /**
+         * Envía un texto a la app probando 4 métodos, del más específico al
+         * más general. Se usa el primero que esté disponible.
+         * En Kodular el bloque "WebViewer.WebViewStringChange" recibe el texto.
+         * @param {string} message Texto a enviar (normalmente un JSON).
+         */
+        function sendToAppInventor(message) {
+            try {
+                if (window.AppInventor && window.AppInventor.setWebViewString) {
+                    window.AppInventor.setWebViewString(message);            // Kodular / App Inventor
+                } else if (window.android && window.android.onReceiveValue) {
+                    window.android.onReceiveValue(message);                   // Android (versiones nuevas)
+                } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+                    window.androidInterface.onReceiveValue(message);          // Interface estándar
+                } else {
+                    window.postMessage(message, '*');                         // Navegador normal (pruebas)
+                }
+            } catch (e) {
+                console.log('Error enviando a AppInventor:', e);
+            }
+            console.log('Enviado a AppInventor:', message);
+        }
+
+        /**
+         * Arma y envía un mensaje estándar de esta pantalla (mismo formato que
+         * las demás pantallas). Lleva "internetStatus": "online" | "offline"
+         * ("" si la primera verificación aún no terminó).
+         * IMPORTANTE: en esta pantalla SOLO lo usa exitConfig() (botón "Salir").
+         * @param {string} action  Qué pasó ('exit').
+         * @param {string} status  Resultado ('saved', 'unchanged' o 'error').
+         * @param {object} [extra] Campos adicionales (orientation).
+         */
+        function send(action, status, extra) {
+            var msg = {
+                origin: 'config',
+                action: action,
+                status: status,
+                internetStatus: internetStatus === 'unknown' ? '' : internetStatus
+            };
+            if (extra) {
+                for (var key in extra) {
+                    if (Object.prototype.hasOwnProperty.call(extra, key)) msg[key] = extra[key];
+                }
+            }
+            sendToAppInventor(JSON.stringify(msg));
+        }
+
+        /* ==================================================================
+           4. ORIENTACIÓN Y AJUSTE A PANTALLA
+           Igual que en las demás pantallas, y además #scaler se reduce lo
+           justo para que la tarjeta quepa siempre en pantalla.
+
+           Cómo funciona la rotación:
+            - #stage se gira con CSS transform alrededor de su esquina superior
+              izquierda y luego se desplaza (translate) para volver a cubrir la pantalla.
+            - Con 90° y 270° el escenario "se acuesta": ancho y alto se intercambian.
+           ================================================================== */
+        var layoutManager = {
+            stage: null,        // elemento #stage
+            scaler: null,       // elemento #scaler
+            card: null,         // tarjeta de configuración (para medir su tamaño)
+            orientation: 0,     // grados aplicados ahora
+
+            /**
+             * Aplica la orientación y vuelve a aplicarla si la pantalla
+             * cambia de tamaño o de orientación física.
+             * @param {number} orientation Grados iniciales.
+             */
+            init: function (orientation) {
+                var self = this;
+                this.stage = document.getElementById('stage');
+                this.scaler = document.getElementById('scaler');
+                this.card = document.getElementById('configContainer');
+                this.apply(orientation);
+                var reapply = function () { self.apply(self.orientation); };
+                window.addEventListener('resize', reapply);
+                window.addEventListener('orientationchange', reapply);
+            },
+
+            /**
+             * Gira la página y ajusta la tarjeta al espacio disponible.
+             * @param {number} orientation 0, 90, 180 o 270.
+             */
+            apply: function (orientation) {
+                this.orientation = orientation;
+
+                var width = window.innerWidth || document.documentElement.clientWidth;
+                var height = window.innerHeight || document.documentElement.clientHeight;
+
+                var stageWidth = width;
+                var stageHeight = height;
+                var transform = 'none';
+
+                // Para cada giro: medidas del escenario y desplazamiento que lo devuelve a la pantalla
+                if (orientation === 90) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(' + width + 'px, 0px) rotate(90deg)';
+                } else if (orientation === 180) {
+                    transform = 'translate(' + width + 'px, ' + height + 'px) rotate(180deg)';
+                } else if (orientation === 270) {
+                    stageWidth = height;
+                    stageHeight = width;
+                    transform = 'translate(0px, ' + height + 'px) rotate(270deg)';
+                }
+
+                this.stage.style.width = stageWidth + 'px';
+                this.stage.style.height = stageHeight + 'px';
+                this.stage.style.transformOrigin = '0 0';
+                this.stage.style.transform = transform;
+
+                // Ajuste a pantalla: offsetWidth/Height miden la tarjeta SIN transformaciones
+                var fit = Math.min(
+                    1,
+                    (stageWidth - FIT_MARGIN * 2) / this.card.offsetWidth,
+                    (stageHeight - FIT_MARGIN * 2) / this.card.offsetHeight
+                );
+                this.scaler.style.transformOrigin = '50% 50%';
+                this.scaler.style.transform = 'scale(' + fit.toFixed(3) + ')';
+            }
+        };
+
+        /* ==================================================================
+           5. LÓGICA DE CONFIGURACIÓN
+           ================================================================== */
+
+        /**
+         * Normaliza una orientación. Acepta números o textos numéricos;
+         * 360 = 0 y los negativos se normalizan (-90 equivale a 270).
+         * @param {*} value
+         * @returns {number|null} Grados válidos, o null si no es válido.
+         */
+        function normalizeOrientation(value) {
+            if (value === undefined || value === null || value === '') return null;
+            var degrees = parseInt(value, 10);
+            if (isNaN(degrees)) return null;
+            degrees = ((degrees % 360) + 360) % 360;   // lleva cualquier valor al rango 0-359
+            return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /**
+         * Lee la orientación guardada en localStorage.
+         * @returns {number|null} Grados guardados, o null si no hay ninguno
+         *          (o si el WebView no permite localStorage).
+         */
+        function readSavedOrientation() {
+            try {
+                return normalizeOrientation(window.localStorage.getItem(ORIENTATION_KEY));
+            } catch (e) {
+                console.log('No se pudo leer localStorage:', e);
+                return null;
+            }
+        }
+
+        /**
+         * Guarda la orientación en localStorage (la leen las demás pantallas).
+         * @param {number} degrees
+         * @returns {boolean} true si se guardó.
+         */
+        function writeSavedOrientation(degrees) {
+            return writeStorage(ORIENTATION_KEY, String(degrees));
+        }
+
+        /**
+         * Escribe un valor en localStorage y comprueba que quedó guardado.
+         * @param {string} key
+         * @param {string} value
+         * @returns {boolean} true si se guardó.
+         */
+        function writeStorage(key, value) {
+            try {
+                window.localStorage.setItem(key, value);
+                return window.localStorage.getItem(key) === value;
+            } catch (e) {
+                console.log('No se pudo escribir localStorage:', e);
+                return false;
+            }
+        }
+
+        /**
+         * Valida una opción de ligas.
+         * @param {*} value Clave de LEAGUE_OPTIONS (mlb, nba, nflnhl, none).
+         * @returns {string|null} La clave si es válida, o null.
+         */
+        function normalizeLeague(value) {
+            return (typeof value === 'string' && LEAGUE_OPTIONS.hasOwnProperty(value)) ? value : null;
+        }
+
+        /**
+         * Lee la opción de ligas guardada en localStorage.
+         * @returns {string|null} Clave guardada, o null si no hay ninguna
+         *          (o si el WebView no permite localStorage).
+         */
+        function readSavedLeague() {
+            try {
+                return normalizeLeague(window.localStorage.getItem(LEAGUE_KEY));
+            } catch (e) {
+                console.log('No se pudo leer localStorage:', e);
+                return null;
+            }
+        }
+
+        /** @returns {boolean} true si lo que hay en pantalla difiere de lo guardado. */
+        function isDirty() {
+            return current.orientation !== saved.orientation || current.league !== saved.league;
+        }
+
+        /**
+         * Cambia la opción de ligas en pantalla. No envía nada a la app.
+         * @param {string} value Clave de LEAGUE_OPTIONS.
+         */
+        function setLeague(value) {
+            var league = normalizeLeague(value);
+            if (league === null || league === current.league) return;
+            current.league = league;
+            justSaved = false;
+            saveError = false;
+            render();
+        }
+
+        /**
+         * Cambia la orientación en pantalla (gira la página en vivo).
+         * No envía nada a la app.
+         * @param {*} value Grados.
+         */
+        function setOrientation(value) {
+            var degrees = normalizeOrientation(value);
+            if (degrees === null || degrees === current.orientation) return;
+            current.orientation = degrees;
+            justSaved = false;
+            saveError = false;
+            layoutManager.apply(degrees);
+            render();
+        }
+
+        /**
+         * "Guardar": escribe la orientación y la opción de ligas en
+         * localStorage (así se recuerdan al volver a abrir la pantalla, y la
+         * orientación la usan las demás pantallas). No envía nada a la app:
+         * el resultado se informa al pulsar "Salir".
+         */
+        function saveConfig() {
+            var stored = writeSavedOrientation(current.orientation) &&
+                writeStorage(LEAGUE_KEY, current.league);
+            if (stored) {
+                saved.orientation = current.orientation;
+                saved.league = current.league;
+                justSaved = true;
+                saveError = false;
+                savedThisSession = true;
+            } else {
+                saveError = true;
+            }
+            render();
+        }
+
+        /**
+         * "Salir": ÚNICO punto que envía un JSON a la app.
+         * Los cambios sin guardar se descartan (la pantalla vuelve a lo
+         * guardado) y se informa la configuración GUARDADA:
+         *   status "saved"     => en esta visita se guardó la configuración.
+         *   status "unchanged" => no se guardó nada en esta visita.
+         *   status "error"     => el último intento de guardar falló.
+         *   orientation       => orientación guardada (número).
+         *   league            => opción de ligas guardada ("MLB", "NBA", "NFL & NHL", "NINGUNO").
+         *   leagues           => sus valores ("LIDOM,MLB,..." o "none").
+         * La app (Kodular) debe cerrar esta pantalla al recibirlo.
+         */
+        function exitConfig() {
+            var status = saveError ? 'error' : (savedThisSession ? 'saved' : 'unchanged');
+            if (isDirty()) {
+                // Descartar cambios sin guardar: volver a lo guardado
+                current.orientation = saved.orientation;
+                current.league = saved.league;
+                layoutManager.apply(current.orientation);
+                render();
+            }
+            send('exit', status, {
+                orientation: saved.orientation,
+                league: LEAGUE_OPTIONS[saved.league].label,
+                leagues: LEAGUE_OPTIONS[saved.league].values
+            });
+        }
+
+        /* ==================================================================
+           6. UI (refleja el estado en pantalla)
+           ================================================================== */
+
+        /** Actualiza los botones de orientación y de ligas, y el mensaje de estado. */
+        function render() {
+            var i;
+
+            // Botón de la orientación elegida
+            for (i = 0; i < el.orientButtons.length; i++) {
+                var o = parseInt(el.orientButtons[i].getAttribute('data-orientation'), 10);
+                el.orientButtons[i].classList.toggle('selected', o === current.orientation);
+            }
+
+            // Opción de ligas elegida y sus valores
+            for (i = 0; i < el.leagueButtons.length; i++) {
+                el.leagueButtons[i].classList.toggle('selected',
+                    el.leagueButtons[i].getAttribute('data-league') === current.league);
+            }
+            el.leagueValues.innerHTML = '';
+            var label = document.createElement('b');
+            label.textContent = LEAGUE_OPTIONS[current.league].label + ': ';
+            el.leagueValues.appendChild(label);
+            el.leagueValues.appendChild(document.createTextNode(
+                LEAGUE_OPTIONS[current.league].values.split(',').join(', ')));
+
+            // Mensaje de estado
+            el.status.classList.remove('dirty', 'saved');
+            if (saveError) {
+                el.status.textContent = 'No se pudo guardar la configuración';
+                el.status.classList.add('dirty');
+            } else if (isDirty()) {
+                el.status.textContent = 'Cambios sin guardar';
+                el.status.classList.add('dirty');
+            } else if (justSaved) {
+                el.status.textContent = 'Configuración guardada ✓';
+                el.status.classList.add('saved');
+            } else {
+                el.status.textContent = '';
+            }
+        }
+
+        /** Actualiza el indicador de internet de la cabecera. */
+        function renderNet() {
+            el.net.className = 'net ' + (internetStatus === 'unknown' ? '' : internetStatus);
+            el.netText.textContent = internetStatus === 'online' ? 'Con internet'
+                : internetStatus === 'offline' ? 'Sin internet' : 'Verificando…';
+        }
+
+        /* ==================================================================
+           7. TECLADO Y CONTROL REMOTO
+           Pensado para una TV montada GIRADA físicamente: quien la mira lee
+           el texto derecho. Por eso las flechas siguen al CONTENIDO tal como
+           se lee, en cualquier orientación (0°, 90°, 180° o 270°):
+             → botón de la derecha    ← botón de la izquierda
+             ↑ fila de arriba         ↓ fila de abajo
+
+           Cómo: las posiciones se miden SIN el giro de la página
+           (offsetLeft/offsetTop ignoran las transformaciones CSS), así el
+           resultado es el mismo en las 4 orientaciones.
+           ================================================================== */
+
+        /** Flechas según e.key (teclado y WebView modernos). */
+        var KEY_DIRECTIONS = {
+            ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+            Up: 'up', Down: 'down', Left: 'left', Right: 'right'          // nombres antiguos
+        };
+
+        /** Flechas según e.keyCode (por si e.key no viene informado). */
+        var KEYCODE_DIRECTIONS = {
+            37: 'left', 38: 'up', 39: 'right', 40: 'down',   // flechas del teclado / WebView
+            21: 'left', 19: 'up', 22: 'right', 20: 'down'    // KEYCODE_DPAD_* de Android
+        };
+
+        /**
+         * Traduce una tecla a dirección.
+         * @param {KeyboardEvent} e
+         * @returns {string|null} 'up' | 'down' | 'left' | 'right', o null si no es una flecha.
+         */
+        function getDirection(e) {
+            return KEY_DIRECTIONS[e.key] || KEYCODE_DIRECTIONS[e.keyCode] || null;
+        }
+
+        /**
+         * @param {KeyboardEvent} e
+         * @returns {boolean} true si es una tecla de "aceptar":
+         *          Enter, Espacio u OK del control remoto (DPAD_CENTER = 23).
+         */
+        function isOkKey(e) {
+            return e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar' || e.key === 'Select' ||
+                e.keyCode === 13 || e.keyCode === 32 || e.keyCode === 23;
+        }
+
+        /**
+         * Centro del elemento en coordenadas del CONTENIDO, tal como se lee
+         * (sin el giro de la página). offsetLeft/offsetTop ignoran las
+         * transformaciones CSS, así que da lo mismo en cualquier orientación.
+         * @returns {{x:number, y:number}}
+         */
+        function contentCenter(element) {
+            var x = element.offsetWidth / 2;
+            var y = element.offsetHeight / 2;
+            for (var node = element; node; node = node.offsetParent) {
+                x += node.offsetLeft;
+                y += node.offsetTop;
+            }
+            return { x: x, y: y };
+        }
+
+        /**
+         * Busca el botón más cercano en una dirección del contenido.
+         * Puntuación = distancia en la dirección pedida + 4 × desvío lateral,
+         * así se prefiere el botón que está "en línea" (misma fila o columna)
+         * antes que uno en diagonal, aunque esté más lejos.
+         * @param {HTMLElement} from Botón con el foco.
+         * @param {string} dir 'up' | 'down' | 'left' | 'right' (tal como se pulsó).
+         * @returns {HTMLElement|null} null si no hay ninguno en esa dirección (borde).
+         */
+        function findNeighbor(from, dir) {
+            var a = contentCenter(from);
+            var best = null;
+            var bestScore = Infinity;
+
+            for (var i = 0; i < el.focusables.length; i++) {
+                var btn = el.focusables[i];
+                if (btn === from || btn.disabled) continue;
+
+                var c = contentCenter(btn);
+                var dx = c.x - a.x;
+                var dy = c.y - a.y;
+                var along = dir === 'right' ? dx : dir === 'left' ? -dx : dir === 'down' ? dy : -dy;
+                var across = (dir === 'left' || dir === 'right') ? Math.abs(dy) : Math.abs(dx);
+                if (along < 1) continue;               // no está en esa dirección
+                if (across > along) continue;          // está más "al costado" que en la dirección (diagonal)
+
+                var score = along + across * 4;
+                if (score < bestScore) {
+                    best = btn;
+                    bestScore = score;
+                }
+            }
+            return best;
+        }
+
+        /** Pone el foco en el botón de la orientación actual (punto de partida). */
+        function focusDefault() {
+            el.orientButtons[ORIENTATIONS.indexOf(current.orientation)].focus();
+        }
+
+        /**
+         * Mueve el foco en una dirección del contenido. Si ningún botón
+         * tiene el foco (por ejemplo tras un clic en el fondo), lo recupera.
+         * @param {string} dir 'up' | 'down' | 'left' | 'right'
+         */
+        function moveFocus(dir) {
+            var from = document.activeElement;
+            if (el.focusables.indexOf(from) === -1) {
+                focusDefault();
+                return;
+            }
+            var target = findNeighbor(from, dir);
+            if (target) target.focus();
+        }
+
+        /**
+         * Atiende el teclado y el control remoto:
+         *   Flechas        mover el foco según el contenido tal como se lee.
+         *   OK/Enter/Espacio  pulsar el botón con foco (mantenerla no repite).
+         *   1 a 4          elegir 0°, 90°, 180° o 270° directamente.
+         *   Esc            llevar el foco a "Salir" (no sale: hay que pulsar OK).
+         */
+        function onKeyDown(e) {
+            var dir = getDirection(e);
+            if (dir) {
+                e.preventDefault();            // evita que la página se desplace
+                moveFocus(dir);
+                return;
+            }
+
+            if (isOkKey(e)) {
+                e.preventDefault();            // evita el "clic" nativo (sería una pulsación doble)
+                if (e.repeat) return;          // mantener OK pulsado no repite la acción
+                var active = document.activeElement;
+                if (el.focusables.indexOf(active) !== -1) active.click();
+                else focusDefault();
+                return;
+            }
+
+            // Atajos numéricos: 1 = 0°, 2 = 90°, 3 = 180°, 4 = 270°
+            var n = parseInt(e.key, 10);
+            if (n >= 1 && n <= ORIENTATIONS.length) {
+                e.preventDefault();
+                setOrientation(ORIENTATIONS[n - 1]);
+                el.orientButtons[n - 1].focus();
+                return;
+            }
+
+            if (e.key === 'Escape' || e.key === 'Esc' || e.keyCode === 27) {
+                e.preventDefault();
+                el.exitBtn.focus();
+            }
+        }
+
+        /* ==================================================================
+           8. CONEXIÓN A INTERNET (mismo método que fingerprint.html)
+           Ciclo: runCheck() -> probeInternet() -> applyResult()
+                  -> setInternetStatus() -> scheduleNextCheck()
+           ================================================================== */
+
+        /**
+         * Comprueba que el contenido recibido sea realmente el esperado del servidor de internet.
+         * @param {string} type "dns" | "ip"
+         * @param {string} text Cuerpo de la respuesta.
+         * @returns {boolean}
+         */
+        function validateResponse(type, text) {
+            try {
+                var data = JSON.parse(text);
+                if (type === 'dns') {
+                    return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+                }
+                if (type === 'ip') {
+                    return !!data && typeof data.ip === 'string' && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+                }
+            } catch (e) { /* respuesta no JSON = no es internet real */ }
+            return false;
+        }
+
+        /**
+         * Prueba UN servidor.
+         * @param {{url:string, type:string}} ep
+         * @param {number} timeoutMs
+         * @returns {Promise<boolean>} true solo si respondió 200 Y el contenido es el esperado.
+         */
+        function pingEndpoint(ep, timeoutMs) {
+            return new Promise(function (resolve) {
+                var done = false;
+                var xhr = null;
+                var timer = setTimeout(function () { finish(false); }, timeoutMs);
+
+                // Termina una sola vez (respuesta, error o tiempo agotado)
+                function finish(ok) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    if (!ok && xhr) {
+                        try { xhr.abort(); } catch (e) { /* ignorar */ }
+                    }
+                    resolve(ok);
+                }
+
+                try {
+                    var sep = ep.url.indexOf('?') === -1 ? '?' : '&';
+                    // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+                    var pad = Math.random().toString(36).slice(2, 12);
+                    xhr = new XMLHttpRequest();
+                    xhr.open('GET', ep.url + sep + 'random_padding=' + pad, true);
+                    xhr.timeout = timeoutMs;
+                    if (ep.type === 'dns') xhr.setRequestHeader('Accept', 'application/dns-json');
+                    xhr.onload = function () {
+                        finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+                    };
+                    xhr.onerror = function () { finish(false); };
+                    xhr.ontimeout = function () { finish(false); };
+                    xhr.onabort = function () { finish(false); };
+                    xhr.send();
+                } catch (e) {
+                    finish(false);
+                }
+            });
+        }
+
+        /**
+         * Prueba todos los servidores en paralelo; basta con que uno sea válido.
+         * @returns {Promise<boolean>} true si hay internet.
+         */
+        function probeInternet() {
+            var eps = CONNECTION_CONFIG.endpoints;
+            return new Promise(function (resolve) {
+                var pending = eps.length;
+                var resolved = false;
+                if (!pending) {
+                    resolve(false);
+                    return;
+                }
+                eps.forEach(function (ep) {
+                    pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+                        if (resolved) return;
+                        if (ok) {
+                            resolved = true;
+                            resolve(true);
+                        } else if (--pending === 0) {
+                            resolved = true;
+                            resolve(false);
+                        }
+                    });
+                });
+            });
+        }
+
+        /**
+         * Cambia el estado de internet y actualiza la cabecera. No envía nada
+         * a la app: el estado viaja en "internetStatus" del JSON de "Salir".
+         * @param {string} next 'online' | 'offline'
+         */
+        function setInternetStatus(next) {
+            if (next === internetStatus) return;
+            internetStatus = next;
+            renderNet();
+        }
+
+        /**
+         * Decide el nuevo estado. Histéresis: un fallo aislado no declara
+         * "offline"; un éxito sí declara "online".
+         * @param {boolean} ok        Resultado de la verificación.
+         * @param {boolean} immediate true = aplicar sin histéresis.
+         */
+        function applyResult(ok, immediate) {
+            if (ok) {
+                failures = 0;
+                setInternetStatus('online');
+            } else {
+                failures++;
+                if (immediate || internetStatus !== 'online' ||
+                    failures >= CONNECTION_CONFIG.failuresToOffline) {
+                    setInternetStatus('offline');
+                }
+            }
+        }
+
+        /** Programa la próxima verificación según el estado. */
+        function scheduleNextCheck() {
+            var delay;
+            if (internetStatus === 'online') {
+                delay = failures > 0 ? CONNECTION_CONFIG.retryIntervalMs : CONNECTION_CONFIG.onlineIntervalMs;
+            } else {
+                delay = CONNECTION_CONFIG.offlineIntervalMs;
+            }
+            clearTimeout(checkTimer);
+            checkTimer = setTimeout(function () { runCheck(false); }, delay);
+        }
+
+        /**
+         * Ejecuta una verificación real (sin solapes: si ya hay una en curso,
+         * devuelve esa misma).
+         * @param {boolean} immediate true = aplicar el resultado sin histéresis.
+         * @returns {Promise<boolean>} true si hay internet.
+         */
+        function runCheck(immediate) {
+            if (currentCheck) return currentCheck;
+
+            clearTimeout(checkTimer);
+
+            // Sin red local (Wi-Fi/cable desconectado) no hace falta consultar servidores
+            if (!navigator.onLine) {
+                lastLatency = 0;
+                applyResult(false, true);
+                scheduleNextCheck();
+                return Promise.resolve(false);
+            }
+
+            var started = Date.now();
+            currentCheck = probeInternet().then(function (ok) {
+                currentCheck = null;
+                lastLatency = Date.now() - started;
+                applyResult(ok, !!immediate);
+                scheduleNextCheck();
+                return internetStatus === 'online';
+            });
+            return currentCheck;
+        }
+
+        /** Escucha los eventos de red y hace la primera verificación. */
+        function startConnectionMonitoring() {
+            // Los eventos del navegador solo disparan una verificación real
+            window.addEventListener('online', function () { runCheck(false); });
+            window.addEventListener('offline', function () { runCheck(false); });
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) runCheck(false);
+            });
+            if (navigator.connection && navigator.connection.addEventListener) {
+                navigator.connection.addEventListener('change', function () { runCheck(false); });
+            }
+            runCheck(false);
+        }
+
+        /* ==================================================================
+           9. API PÚBLICA (llamada desde Kodular con RunJavaScript)
+           Ver la lista completa en "FUNCIONES PUBLICAS" al inicio del archivo.
+           ================================================================== */
+
+        /**
+         * Recibe los datos de la app (ver "contrato de entrada" al inicio del archivo).
+         * La orientación NO se recibe por aquí: se lee de localStorage.
+         * @param {string|object} jsonData Texto JSON u objeto.
+         */
+        window.updateData = function (jsonData) {
+            try {
+                var data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+                if (!data || typeof data !== 'object') return;
+                console.log('updateData recibido:', data);
+
+                if (data.version) el.version.textContent = 'Versión: ' + data.version;
+                if (data.url) el.website.textContent = ' · ' + data.url;
+                if (data.email) el.email.textContent = ' · ' + data.email;
+            } catch (e) {
+                // JSON inválido: se ignora (esta pantalla solo envía JSON con "Salir")
+                console.error('Error al procesar updateData:', e);
+            }
+        };
+
+        /** @returns {string} JSON con la configuración en pantalla:
+            {"orientation":..,"league":"MLB","leagues":"LIDOM,MLB,..."} */
+        window.getConfig = function () {
+            return JSON.stringify({
+                orientation: current.orientation,
+                league: LEAGUE_OPTIONS[current.league].label,
+                leagues: LEAGUE_OPTIONS[current.league].values
+            });
+        };
+
+        window.saveConfig = saveConfig;
+        window.exitConfig = exitConfig;
+
+        // Fuerza una verificación real (no envía nada a la app).
+        // Devuelve el último estado conocido ('online' | 'offline' | 'unknown').
+        window.checkConnection = function () {
+            runCheck(true);
+            return internetStatus;
+        };
+
+        // Versión asíncrona: Promise<boolean> con el resultado real.
+        window.checkConnectionAsync = function () {
+            return runCheck(true);
+        };
+
+        /* ==================================================================
+           10. INICIO
+           ================================================================== */
+
+        /** Arranca la pantalla. Se ejecuta una sola vez, cuando el HTML está listo. */
+        function init() {
+            el.orientButtons = Array.prototype.slice.call(document.querySelectorAll('.orient'));
+            el.leagueButtons = Array.prototype.slice.call(document.querySelectorAll('.league'));
+            el.leagueValues = document.getElementById('leagueValues');
+            el.status = document.getElementById('statusText');
+            el.version = document.getElementById('versionText');
+            el.website = document.getElementById('websiteUrl');
+            el.email = document.getElementById('emailContact');
+            el.net = document.getElementById('netStatus');
+            el.netText = document.getElementById('netText');
+
+            el.saveBtn = document.getElementById('saveBtn');
+            el.exitBtn = document.getElementById('exitBtn');
+
+            // Botones a los que se llega con las flechas
+            el.focusables = el.orientButtons.concat(el.leagueButtons, [el.saveBtn, el.exitBtn]);
+
+            // Clics / toques / OK del control remoto
+            el.orientButtons.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    setOrientation(btn.getAttribute('data-orientation'));
+                });
+            });
+            el.leagueButtons.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    setLeague(btn.getAttribute('data-league'));
+                });
+            });
+            el.saveBtn.addEventListener('click', saveConfig);
+            el.exitBtn.addEventListener('click', exitConfig);
+            document.addEventListener('keydown', onKeyDown);
+
+            // El foco nunca debe perderse: un clic en el fondo no se lo quita a
+            // los botones, y al volver a la app se recupera
+            document.addEventListener('mousedown', function (e) {
+                if (el.focusables.indexOf(e.target.closest ? e.target.closest('.btn') : null) === -1) {
+                    e.preventDefault();
+                }
+            });
+            window.addEventListener('focus', function () {
+                if (el.focusables.indexOf(document.activeElement) === -1) focusDefault();
+            });
+
+            // Orientación y ligas guardadas (o las de por defecto si nunca se guardaron)
+            var stored = readSavedOrientation();
+            if (stored !== null) {
+                saved.orientation = stored;
+                current.orientation = stored;
+            }
+            var storedLeague = readSavedLeague();
+            if (storedLeague !== null) {
+                saved.league = storedLeague;
+                current.league = storedLeague;
+            }
+
+            layoutManager.init(current.orientation);
+            render();
+            renderNet();
+
+            // Foco inicial en la orientación actual (para empezar a usar el teclado)
+            focusDefault();
+
+            // No se envía nada al arrancar: el único JSON sale con el botón "Salir"
+            startConnectionMonitoring();
+            console.log('Pantalla de configuración cargada.');
+        }
+
+        // Si el HTML aún se está cargando, esperar; si no, arrancar ya
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+    </script>
+</body>
+</html>
