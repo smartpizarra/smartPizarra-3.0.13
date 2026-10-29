@@ -78,6 +78,17 @@
        "internetStatus":"offline","latency":0,"localNetwork":true,
        "checkedAt":"2026-10-26T17:41:11.909Z"}
 
+    TODOS los mensajes llevan además la configuración GUARDADA en
+    config.html (mismas claves que su JSON de "Salir"), leída de
+    localStorage en cada envío (ver withSavedConfig):
+      "orientation":90,"scale":0.8,
+      "leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"
+    Si nunca se guardó nada: 0, 0.6 y "none". "scale" es la escala
+    GUARDADA en config.html como factor de zoom (% / 100: 80% => 0.8)
+    y solo se informa: no es la que se aplica en pantalla (esa llega
+    por updateData, en %). Esta página no
+    cambia esos valores: solo config.html los modifica.
+
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
     updateData(json)        Ver "contrato de entrada".
     setCode(id)             Muestra el ID y genera su QR.
@@ -101,7 +112,9 @@
     8. Solicitud de ID      requestDeviceId().
     9. Conexión             Verificación de internet con histéresis.
    10. Iconos flotantes     createFloatingIcons().
-   11. Orientación/escala   layoutManager (igual que connection.html).
+   11. Orientación/escala   layoutManager (igual que connection.html), y
+                            withSavedConfig(): agrega orientation/scale/
+                            leagues (guardadas en config.html) a cada mensaje.
    12. Anti-quemado         Desplazamiento, color de acento y atenuación.
    13. API pública          Funciones window.* para la app.
    14. Inicio               init().
@@ -818,12 +831,12 @@
                 internetStatus: internetStatus === 'unknown' ? '' : internetStatus
             };
             if (token !== undefined) msg.token = token;
-            sendToAppInventor(JSON.stringify(msg));
+            sendToAppInventor(JSON.stringify(withSavedConfig(msg)));
         }
 
         /** Envía el estado de la conexión (formato: ver "contrato de salida" al inicio). */
         function sendConnectionStatus() {
-            sendToAppInventor(JSON.stringify({
+            sendToAppInventor(JSON.stringify(withSavedConfig({
                 origin: 'loading',
                 action: 'connection',
                 status: internetStatus,          // igual que internetStatus (compatibilidad)
@@ -831,7 +844,7 @@
                 latency: lastLatency,
                 localNetwork: navigator.onLine,  // true = hay red local (Wi-Fi/cable), aunque no haya internet
                 checkedAt: new Date().toISOString()
-            }));
+            })));
         }
 
         /* ==================================================================
@@ -1408,7 +1421,13 @@
             maxScale: 300,          // porcentaje máximo aceptado
             // Clave de localStorage donde config.html guarda la orientación.
             // Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html.
-            orientationKey: 'smartpizarra.orientation'
+            orientationKey: 'smartpizarra.orientation',
+            // Clave de localStorage donde config.html guarda la escala. Solo se lee para
+            // informarla en los JSON: NO se aplica (la escala visual llega por updateData).
+            savedScaleKey: 'smartpizarra.scale',
+            // Escala (%) que se informa si nunca se guardó una en config.html (60 => zoom 0.6).
+            // Debe ser IGUAL a DEFAULT_CONFIG.scale de config.html. No es defaultScale (tamaño visual).
+            savedScaleDefault: 60
         };
 
         /**
@@ -1424,6 +1443,61 @@
                 console.log('No se pudo leer localStorage:', e);
                 return null;
             }
+        }
+
+        /** Opción de ligas (se elige y se guarda en config.html; aquí solo se lee). */
+        var LEAGUE_CONFIG = {
+            // Clave de localStorage donde config.html guarda la opción de ligas.
+            storageKey: 'smartpizarra.league',
+            defaultOption: 'none',  // se usa si nunca se guardó una opción en config.html
+            // Ligas de cada opción: copia de los "values" de LEAGUE_OPTIONS de config.html.
+            // Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html.
+            options: {
+                mlb:    'LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB',
+                nba:    'NBA,CBK,NBAPROP,WNBA,WCBK,EUBK',
+                nflnhl: 'NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS',
+                none:   'none'
+            }
+        };
+
+        /**
+         * Agrega a un mensaje la configuración GUARDADA en config.html (mismas
+         * claves que su JSON de "Salir"). Se lee de localStorage en cada envío,
+         * así siempre refleja lo último que se guardó.
+         *   orientation  número: 0, 90, 180 o 270 (0 si nunca se guardó)
+         *   scale        número: escala guardada como factor de zoom (% / 100:
+         *                0.8, 1, 1.2...; 0.6 si nunca se guardó). Solo se informa;
+         *                no es la escala aplicada en pantalla.
+         *   leagues      ligas de la opción guardada ("LIDOM,MLB,..." o "none")
+         * @param {object} msg Mensaje a completar.
+         * @returns {object} El mismo mensaje, con los tres campos agregados.
+         */
+        function withSavedConfig(msg) {
+            var degrees = parseInt(readSavedOrientation(), 10);
+            degrees = ((degrees % 360) + 360) % 360;   // 360 = 0, -90 = 270 (NaN sigue siendo NaN)
+            if (LAYOUT_CONFIG.allowedOrientations.indexOf(degrees) === -1) {
+                degrees = LAYOUT_CONFIG.defaultOrientation;
+            }
+
+            var key = null;
+            var scale = NaN;
+            try {
+                key = window.localStorage.getItem(LEAGUE_CONFIG.storageKey);
+                scale = parseInt(window.localStorage.getItem(LAYOUT_CONFIG.savedScaleKey), 10);
+            } catch (e) {
+                console.log('No se pudo leer localStorage:', e);
+            }
+            if (!Object.prototype.hasOwnProperty.call(LEAGUE_CONFIG.options, key)) {
+                key = LEAGUE_CONFIG.defaultOption;
+            }
+            if (isNaN(scale) || scale < LAYOUT_CONFIG.minScale || scale > LAYOUT_CONFIG.maxScale) {
+                scale = LAYOUT_CONFIG.savedScaleDefault;
+            }
+
+            msg.orientation = degrees;
+            msg.scale = scale / 100;   // factor de zoom, igual que el JSON de "Salir" de config.html
+            msg.leagues = LEAGUE_CONFIG.options[key];
+            return msg;
         }
 
         // Cómo funciona la rotación:

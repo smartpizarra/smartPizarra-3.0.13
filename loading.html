@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <!--
 =====================================================================
   SMART PIZARRA - PANTALLA DE CARGA (SPLASH) PARA ANDROID WEBVIEW
@@ -48,11 +48,19 @@
 
   CONTRATO DE SALIDA: mensaje enviado a la app
     {"origin":"loadingPage","action":"loading","status":"true",
-     "internetStatus":"online"}
+     "internetStatus":"online","orientation":90,"scale":0.8,
+     "leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"}
 
   "internetStatus" vale "online" u "offline" según la comprobación
   REAL hecha durante la animación. Es la misma clave que usan
   connection.html y fingerprint.html.
+  "orientation", "scale" y "leagues" son la configuración guardada en
+  config.html (mismas claves que su JSON de "Salir", y que los mensajes
+  de connection.html y fingerprint.html). Si nunca se guardó nada: 0,
+  0.6 y "none" (CONFIG.layout / CONFIG.league). "scale" va como factor
+  de zoom (% / 100: 80% => 0.8) y solo se informa: NO es la escala
+  aplicada en pantalla (esa llega por updateData, en %). Esta página no
+  cambia esos valores: solo config.html los modifica.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
     updateData(json)   Ver "contrato de entrada". Es la única función
@@ -104,288 +112,346 @@
 =====================================================================
 -->
 <html lang="es">
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <!-- Sin zoom: en un WebView la pantalla de carga debe verse siempre igual -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Cargando...</title>
 
     <style>
-        /* ==============================================================
+      /* ==============================================================
            1. BASE: reinicio de estilos y fondo de pantalla completa
            ============================================================== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent; /* sin resaltado azul al tocar */
-        }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent; /* sin resaltado azul al tocar */
+      }
 
-        /* height:100% y no 100vh: en WebView "vh" puede fallar cuando cambia la barra del sistema */
-        html, body {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #002B4F;
-        }
+      /* height:100% y no 100vh: en WebView "vh" puede fallar cuando cambia la barra del sistema */
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #002b4f;
+      }
 
-        body {
-            position: relative;
-            font-family: 'Segoe UI', Roboto, Tahoma, Geneva, Verdana, sans-serif;
-            color: #ffffff;
-            user-select: none;   /* evita seleccionar texto por accidente */
-        }
+      body {
+        position: relative;
+        font-family: "Segoe UI", Roboto, Tahoma, Geneva, Verdana, sans-serif;
+        color: #ffffff;
+        user-select: none; /* evita seleccionar texto por accidente */
+      }
 
-        /* ==============================================================
+      /* ==============================================================
            2. ESCENARIO Y ESCALADOR (rotación y tamaño)
            Los dimensiona y transforma LayoutManager desde JavaScript.
            ============================================================== */
 
-        /* #stage: se rota 0/90/180/270 grados. Su ancho y alto los fija el
+      /* #stage: se rota 0/90/180/270 grados. Su ancho y alto los fija el
            JS (se intercambian cuando se rota 90 o 270) */
-        #stage {
-            position: absolute;
-            left: 0;
-            top: 0;
-            overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
 
-        /* #scaler: recibe el porcentaje de tamaño (scale). Escala desde su centro */
-        #scaler {
-            width: 100%;
-            display: flex;
-            justify-content: center;
-        }
+      /* #scaler: recibe el porcentaje de tamaño (scale). Escala desde su centro */
+      #scaler {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+      }
 
-        /* ==============================================================
+      /* ==============================================================
            3. TARJETA DE CARGA (todo el contenido del splash)
            ============================================================== */
-        .splash-container {
-            text-align: center;
-            max-width: 100%;
-            width: 400px;
-            padding: 0 20px;
-        }
+      .splash-container {
+        text-align: center;
+        max-width: 100%;
+        width: 400px;
+        padding: 0 20px;
+      }
 
-        /* --- Logo con movimiento flotante --- */
-        .logo {
-            width: 120px;
-            height: 120px;
-            margin: 0 auto 30px;
-            border-radius: 20px;
-            background: linear-gradient(45deg, #2196f3, #21cbf3);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
-            animation: float 3s ease-in-out infinite;
-            will-change: transform;   /* capa propia en GPU: animar no repinta el resto */
-        }
+      /* --- Logo con movimiento flotante --- */
+      .logo {
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 30px;
+        border-radius: 20px;
+        background: linear-gradient(45deg, #2196f3, #21cbf3);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+        animation: float 3s ease-in-out infinite;
+        will-change: transform; /* capa propia en GPU: animar no repinta el resto */
+      }
 
-        .logo-icon { font-size: 48px; font-weight: bold; }
+      .logo-icon {
+        font-size: 48px;
+        font-weight: bold;
+      }
 
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 5px;
-            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-        }
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 5px;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      }
 
-        /* --- Datos que llegan por updateData() (InfoPanel) --- */
+      /* --- Datos que llegan por updateData() (InfoPanel) --- */
 
-        /* Si un campo no recibió datos queda vacío y no ocupa espacio */
-        .info:empty { display: none; }
+      /* Si un campo no recibió datos queda vacío y no ocupa espacio */
+      .info:empty {
+        display: none;
+      }
 
-        .subtitle {                       /* versión */
-            font-size: 1.2rem;
-            color: rgba(255, 255, 255, 0.8);
-            margin-bottom: 8px;
-        }
+      .subtitle {
+        /* versión */
+        font-size: 1.2rem;
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 8px;
+      }
 
-        .website {                        /* url */
-            font-size: 1.1rem;
-            color: #00e5ff;
-            margin-bottom: 8px;
-            font-weight: 300;
-            letter-spacing: 1px;
-        }
+      .website {
+        /* url */
+        font-size: 1.1rem;
+        color: #00e5ff;
+        margin-bottom: 8px;
+        font-weight: 300;
+        letter-spacing: 1px;
+      }
 
-        .email-contact {                  /* email */
-            font-size: 1rem;
-            color: rgba(255, 255, 255, 0.7);
-            margin-bottom: 8px;
-        }
+      .email-contact {
+        /* email */
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 8px;
+      }
 
-        .system-id {                      /* id (puede ser largo: se parte en líneas) */
-            font-size: 0.9rem;
-            color: rgba(255, 255, 255, 0.6);
-            margin-bottom: 8px;
-            word-break: break-all;
-        }
+      .system-id {
+        /* id (puede ser largo: se parte en líneas) */
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-bottom: 8px;
+        word-break: break-all;
+      }
 
-        /* --- Barra de progreso --- */
-        .loading-container {              /* riel gris de la barra */
-            width: 100%;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 2px;
-            overflow: hidden;
-            margin-top: 22px;
-            margin-bottom: 20px;
-        }
+      /* --- Barra de progreso --- */
+      .loading-container {
+        /* riel gris de la barra */
+        width: 100%;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-top: 22px;
+        margin-bottom: 20px;
+      }
 
-        /* Parte coloreada. Ocupa siempre el 100% del riel y el JS la "estira" con
+      /* Parte coloreada. Ocupa siempre el 100% del riel y el JS la "estira" con
            transform: scaleX(0..1). Así el avance no recalcula el layout de la página. */
-        .loading-bar {
-            height: 100%;
-            width: 100%;
-            background: linear-gradient(90deg, #00e5ff, #2979ff);
-            transform: scaleX(0);
-            transform-origin: 0 50%;
-            transition: transform 0.1s linear;
-            will-change: transform;
-        }
+      .loading-bar {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #00e5ff, #2979ff);
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        transition: transform 0.1s linear;
+        will-change: transform;
+      }
 
-        .progress-text {                  /* texto bajo la barra */
-            font-size: 0.9rem;
-            color: rgba(255, 255, 255, 0.7);
-            margin-top: 10px;
-        }
+      .progress-text {
+        /* texto bajo la barra */
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-top: 10px;
+      }
 
-        /* --- Lista de pasos --- */
-        .loading-steps {
-            margin-top: 30px;
-            text-align: left;
-            /* Fondo sólido semitransparente en vez de backdrop-filter: blur() (pesado en TV box) */
-            background: rgba(255, 255, 255, 0.12);
-            padding: 20px;
-            border-radius: 10px;
-        }
+      /* --- Lista de pasos --- */
+      .loading-steps {
+        margin-top: 30px;
+        text-align: left;
+        /* Fondo sólido semitransparente en vez de backdrop-filter: blur() (pesado en TV box) */
+        background: rgba(255, 255, 255, 0.12);
+        padding: 20px;
+        border-radius: 10px;
+      }
 
-        .step {                           /* paso apagado (aún no alcanzado) */
-            margin: 10px 0;
-            display: flex;
-            align-items: center;
-            opacity: 0.5;
-            transition: opacity 0.3s ease;
-        }
+      .step {
+        /* paso apagado (aún no alcanzado) */
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+        opacity: 0.5;
+        transition: opacity 0.3s ease;
+      }
 
-        .step.active { opacity: 1; color: #00e5ff; }   /* paso alcanzado */
+      .step.active {
+        opacity: 1;
+        color: #00e5ff;
+      } /* paso alcanzado */
 
-        .step-check { margin-right: 10px; font-size: 1.2rem; }
+      .step-check {
+        margin-right: 10px;
+        font-size: 1.2rem;
+      }
 
-        /* --- Puntos "..." del último paso ---
+      /* --- Puntos "..." del último paso ---
            Son 3 <span> que parpadean con opacity, uno tras otro.
            (No se anima la propiedad "content" porque en WebView no es fiable) */
-        .dots span {
-            opacity: 0;
-            animation: dotBlink 1.5s linear infinite;
-        }
-        .dots span:nth-child(2) { animation-delay: 0.25s; }
-        .dots span:nth-child(3) { animation-delay: 0.5s; }
+      .dots span {
+        opacity: 0;
+        animation: dotBlink 1.5s linear infinite;
+      }
+      .dots span:nth-child(2) {
+        animation-delay: 0.25s;
+      }
+      .dots span:nth-child(3) {
+        animation-delay: 0.5s;
+      }
 
-        /* Cuando la animación termina (clase "done") los puntos se detienen y se ocultan */
-        .done .dots span {
-            animation: none;
-            opacity: 0;
-        }
+      /* Cuando la animación termina (clase "done") los puntos se detienen y se ocultan */
+      .done .dots span {
+        animation: none;
+        opacity: 0;
+      }
 
-        /* ==============================================================
+      /* ==============================================================
            4. PANTALLA FINAL DE BIENVENIDA (oculta hasta que termina todo)
            ============================================================== */
-        .welcome {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-        .welcome h2 { margin-bottom: 10px; }
-        .welcome p { color: #00e5ff; }
+      .welcome {
+        display: none;
+        text-align: center;
+        padding: 20px;
+      }
+      .welcome h2 {
+        margin-bottom: 10px;
+      }
+      .welcome p {
+        color: #00e5ff;
+      }
 
-        /* ==============================================================
+      /* ==============================================================
            5. ANIMACIONES (@keyframes)
            ============================================================== */
 
-        /* Logo: sube y baja 15px */
-        @keyframes float {
-            0%, 100% { transform: translate3d(0, 0, 0); }
-            50%      { transform: translate3d(0, -15px, 0); }
+      /* Logo: sube y baja 15px */
+      @keyframes float {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0);
         }
-
-        /* Puntos: aparecen y desaparecen */
-        @keyframes dotBlink {
-            0%, 100% { opacity: 0; }
-            20%, 80% { opacity: 1; }
+        50% {
+          transform: translate3d(0, -15px, 0);
         }
+      }
 
-        /* Salida: la tarjeta se desvanece */
-        @keyframes fadeOut {
-            from { opacity: 1; }
-            to   { opacity: 0; }
+      /* Puntos: aparecen y desaparecen */
+      @keyframes dotBlink {
+        0%,
+        100% {
+          opacity: 0;
         }
+        20%,
+        80% {
+          opacity: 1;
+        }
+      }
 
-        /* Clase que el JS agrega a la tarjeta para iniciar el desvanecimiento
+      /* Salida: la tarjeta se desvanece */
+      @keyframes fadeOut {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 0;
+        }
+      }
+
+      /* Clase que el JS agrega a la tarjeta para iniciar el desvanecimiento
            (su duración debe coincidir con CONFIG.fadeOutMs) */
-        .fade-out {
-            animation: fadeOut 0.5s ease forwards;
-        }
+      .fade-out {
+        animation: fadeOut 0.5s ease forwards;
+      }
 
-        /* Accesibilidad: si el sistema pide menos movimiento, el logo no flota */
-        @media (prefers-reduced-motion: reduce) {
-            .logo { animation: none; }
+      /* Accesibilidad: si el sistema pide menos movimiento, el logo no flota */
+      @media (prefers-reduced-motion: reduce) {
+        .logo {
+          animation: none;
         }
+      }
     </style>
-</head>
+  </head>
 
-<body>
+  <body>
     <!-- #stage  => se rota según la orientación guardada en config.html
          #scaler => se escala según "scale"
          Dentro van la tarjeta de carga y la pantalla de bienvenida -->
-    <div id="stage"><div id="scaler">
-
+    <div id="stage">
+      <div id="scaler">
         <!-- TARJETA DE CARGA -->
         <div class="splash-container" id="splashContainer">
-            <div class="logo">
-                <div class="logo-icon">SP</div>
-            </div>
-            <h1>Smart Pizarra</h1>
+          <div class="logo">
+            <div class="logo-icon">SP</div>
+          </div>
+          <h1>Smart Pizarra</h1>
 
-            <!-- Los 4 campos siguientes los llena InfoPanel con los datos de updateData().
+          <!-- Los 4 campos siguientes los llena InfoPanel con los datos de updateData().
                  Si no llegan datos quedan vacíos y el CSS (.info:empty) los oculta -->
-            <div class="info subtitle" id="versionText"></div>
-            <div class="info website" id="websiteUrl"></div>
-            <div class="info email-contact" id="emailContact"></div>
-            <div class="info system-id" id="systemId"></div>
+          <div class="info subtitle" id="versionText"></div>
+          <div class="info website" id="websiteUrl"></div>
+          <div class="info email-contact" id="emailContact"></div>
+          <div class="info system-id" id="systemId"></div>
 
-            <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
-            <div class="loading-container">
-                <div class="loading-bar" id="loadingBar"></div>
-            </div>
-            <div class="progress-text" id="progressText">Starting system...</div>
+          <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
+          <div class="loading-container">
+            <div class="loading-bar" id="loadingBar"></div>
+          </div>
+          <div class="progress-text" id="progressText">Starting system...</div>
 
-            <!-- Pasos: LoadingAnimation les agrega/quita la clase "active".
+          <!-- Pasos: LoadingAnimation les agrega/quita la clase "active".
                  Si agregas o quitas pasos, ajusta CONFIG.animation.totalSteps
                  y mantén los ids consecutivos: step1, step2, step3... -->
-            <div class="loading-steps" id="loadingSteps">
-                <div class="step active" id="step1"><span class="step-check">&#10003;</span> Loading configuration...</div>
-                <div class="step" id="step2"><span class="step-check">&#10003;</span> Initializing modules...</div>
-                <div class="step" id="step3"><span class="step-check">&#10003;</span> Preparing interface...</div>
-                <div class="step" id="step4"><span class="step-check">&#10003;</span> Loading complete<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>
+          <div class="loading-steps" id="loadingSteps">
+            <div class="step active" id="step1">
+              <span class="step-check">&#10003;</span> Loading configuration...
             </div>
+            <div class="step" id="step2">
+              <span class="step-check">&#10003;</span> Initializing modules...
+            </div>
+            <div class="step" id="step3">
+              <span class="step-check">&#10003;</span> Preparing interface...
+            </div>
+            <div class="step" id="step4">
+              <span class="step-check">&#10003;</span> Loading complete<span
+                class="dots"
+                ><span>.</span><span>.</span><span>.</span></span
+              >
+            </div>
+          </div>
         </div>
 
         <!-- PANTALLA DE BIENVENIDA: oculta (display:none) hasta que termina la animación -->
         <div class="welcome" id="welcome">
-            <h2>¡Bienvenido a Smart Pizarra!</h2>
-            <p>smartpizarra.com</p>
+          <h2>¡Bienvenido a Smart Pizarra!</h2>
+          <p>smartpizarra.com</p>
         </div>
-
-    </div></div>
+      </div>
+    </div>
 
     <script>
-    (function () {
-        'use strict';
+      (function () {
+        "use strict";
 
         /* ==================================================================
            CONFIG - TODOS LOS VALORES AJUSTABLES EN UN SOLO LUGAR
@@ -394,95 +460,127 @@
            en el nivel principal; no modifiques CONFIG mientras la app corre.)
            ================================================================== */
         const CONFIG = Object.freeze({
+          /** Tiempo máximo (ms) que se espera a que la app llame a updateData(). */
+          dataWaitMs: 5000,
 
-            /** Tiempo máximo (ms) que se espera a que la app llame a updateData(). */
-            dataWaitMs: 5000,
+          /** Duración (ms) del desvanecimiento final. Debe coincidir con .fade-out en el CSS. */
+          fadeOutMs: 500,
 
-            /** Duración (ms) del desvanecimiento final. Debe coincidir con .fade-out en el CSS. */
-            fadeOutMs: 500,
+          /** Ajustes de la animación de carga. */
+          animation: {
+            durationMs: 8000, // duración total de la animación
+            tickMs: 100, // cada cuántos ms se actualiza la barra (la transición CSS suaviza)
+            totalSteps: 4, // cantidad de pasos (#step1 ... #step4)
+            recheckInternetAtPercent: 60, // % en el que se repite la comprobación de internet
+            /** Texto bajo la barra: se usa el primero cuyo "below" sea mayor al porcentaje actual. */
+            progressTexts: [
+              { below: 25, text: "Starting system..." },
+              { below: 50, text: "Loading modules..." },
+              { below: 75, text: "Preparing interface..." },
+              { below: Infinity, text: "Completing setup..." },
+            ],
+          },
 
-            /** Ajustes de la animación de carga. */
-            animation: {
-                durationMs: 8000,            // duración total de la animación
-                tickMs: 100,                 // cada cuántos ms se actualiza la barra (la transición CSS suaviza)
-                totalSteps: 4,               // cantidad de pasos (#step1 ... #step4)
-                recheckInternetAtPercent: 60, // % en el que se repite la comprobación de internet
-                /** Texto bajo la barra: se usa el primero cuyo "below" sea mayor al porcentaje actual. */
-                progressTexts: [
-                    { below: 25,       text: 'Starting system...' },
-                    { below: 50,       text: 'Loading modules...' },
-                    { below: 75,       text: 'Preparing interface...' },
-                    { below: Infinity, text: 'Completing setup...' }
-                ]
-            },
-
-            /** Ajustes de rotación y tamaño del contenido. */
-            layout: {
-                allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
-                defaultOrientation: 0,       // se usa si nunca se guardó una orientación en config.html
-                /** Clave de localStorage donde config.html guarda la orientación.
+          /** Ajustes de rotación y tamaño del contenido. */
+          layout: {
+            allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
+            defaultOrientation: 0, // se usa si nunca se guardó una orientación en config.html
+            /** Clave de localStorage donde config.html guarda la orientación.
                     Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html. */
-                orientationKey: 'smartpizarra.orientation',
-                defaultScale: 100,           // porcentaje inicial
-                minScale: 10,                // porcentaje mínimo aceptado
-                maxScale: 300                // porcentaje máximo aceptado
-            },
+            orientationKey: "smartpizarra.orientation",
+            defaultScale: 100, // porcentaje inicial
+            minScale: 10, // porcentaje mínimo aceptado
+            maxScale: 300, // porcentaje máximo aceptado
+            /** Clave de localStorage donde config.html guarda la escala. Solo se lee para
+                    informarla en el JSON: NO se aplica (la escala visual llega por updateData). */
+            savedScaleKey: "smartpizarra.scale",
+            /** Escala (%) que se informa si nunca se guardó una en config.html (60 => zoom 0.6).
+                    Debe ser IGUAL a DEFAULT_CONFIG.scale de config.html. No es defaultScale (tamaño visual). */
+            savedScaleDefault: 60,
+          },
 
-            /** Ajustes de la comprobación de internet (mismo método que connection.html). */
-            internet: {
-                /**
-                 * Cada endpoint responde con un JSON conocido (con CORS) que se LEE y se
-                 * VALIDA. Así un portal cautivo, el router o un DNS local que respondan
-                 * con su propia página NO cuentan como internet. Los endpoints con IP
-                 * (1.1.1.1 / 8.8.8.8) no dependen del DNS local.
-                 * Basta con que UNO sea válido para considerar "online".
-                 */
-                endpoints: [
-                    { url: 'https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
-                    { url: 'https://8.8.8.8/resolve?name=example.com&type=A', type: 'dns' },
-                    { url: 'https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json', type: 'dns' },
-                    { url: 'https://dns.google/resolve?name=example.com&type=A', type: 'dns' },
-                    { url: 'https://api.ipify.org/?format=json', type: 'ip' }
-                ],
-                requestTimeoutMs: 4000,      // tiempo máximo de espera por cada endpoint
-                readyTimeoutMs: 3000         // espera máxima por el resultado al terminar la animación
+          /** Ajustes de la opción de ligas (se elige y se guarda en config.html). */
+          league: {
+            /** Clave de localStorage donde config.html guarda la opción de ligas. */
+            storageKey: "smartpizarra.league",
+            defaultOption: "none", // se usa si nunca se guardó una opción en config.html
+            /** Ligas de cada opción: copia de los "values" de LEAGUE_OPTIONS de config.html.
+                    Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html. */
+            options: {
+              mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+              nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
+              nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
+              none: "none",
             },
+          },
 
-            /** Valores fijos del mensaje que se envía a la app al terminar. */
-            message: {
-                origin: 'loadingPage',
-                action: 'loading',
-                status: 'true'
-            },
+          /** Ajustes de la comprobación de internet (mismo método que connection.html). */
+          internet: {
+            /**
+             * Cada endpoint responde con un JSON conocido (con CORS) que se LEE y se
+             * VALIDA. Así un portal cautivo, el router o un DNS local que respondan
+             * con su propia página NO cuentan como internet. Los endpoints con IP
+             * (1.1.1.1 / 8.8.8.8) no dependen del DNS local.
+             * Basta con que UNO sea válido para considerar "online".
+             */
+            endpoints: [
+              {
+                url: "https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json",
+                type: "dns",
+              },
+              {
+                url: "https://8.8.8.8/resolve?name=example.com&type=A",
+                type: "dns",
+              },
+              {
+                url: "https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json",
+                type: "dns",
+              },
+              {
+                url: "https://dns.google/resolve?name=example.com&type=A",
+                type: "dns",
+              },
+              { url: "https://api.ipify.org/?format=json", type: "ip" },
+            ],
+            requestTimeoutMs: 4000, // tiempo máximo de espera por cada endpoint
+            readyTimeoutMs: 3000, // espera máxima por el resultado al terminar la animación
+          },
 
-            /** Ids de los elementos HTML que usa el script. */
-            ids: {
-                stage: 'stage',
-                scaler: 'scaler',
-                splashContainer: 'splashContainer',
-                welcome: 'welcome',
-                loadingBar: 'loadingBar',
-                progressText: 'progressText',
-                loadingSteps: 'loadingSteps',
-                stepPrefix: 'step',          // los pasos son step1, step2, ...
-                versionText: 'versionText',
-                websiteUrl: 'websiteUrl',
-                emailContact: 'emailContact',
-                systemId: 'systemId'
-            },
+          /** Valores fijos del mensaje que se envía a la app al terminar. */
+          message: {
+            origin: "loadingPage",
+            action: "loading",
+            status: "true",
+          },
 
-            /** Nombres de las clases CSS que el script agrega o quita. */
-            cssClasses: {
-                active: 'active',            // paso alcanzado
-                done: 'done',                // animación terminada (detiene los puntos)
-                fadeOut: 'fade-out'          // inicia el desvanecimiento
-            }
+          /** Ids de los elementos HTML que usa el script. */
+          ids: {
+            stage: "stage",
+            scaler: "scaler",
+            splashContainer: "splashContainer",
+            welcome: "welcome",
+            loadingBar: "loadingBar",
+            progressText: "progressText",
+            loadingSteps: "loadingSteps",
+            stepPrefix: "step", // los pasos son step1, step2, ...
+            versionText: "versionText",
+            websiteUrl: "websiteUrl",
+            emailContact: "emailContact",
+            systemId: "systemId",
+          },
+
+          /** Nombres de las clases CSS que el script agrega o quita. */
+          cssClasses: {
+            active: "active", // paso alcanzado
+            done: "done", // animación terminada (detiene los puntos)
+            fadeOut: "fade-out", // inicia el desvanecimiento
+          },
         });
 
         /** Posibles resultados de la comprobación de internet (también se envían a la app). */
         const INTERNET = Object.freeze({
-            ONLINE: 'online',
-            OFFLINE: 'offline'
+          ONLINE: "online",
+          OFFLINE: "offline",
         });
 
         /* ==================================================================
@@ -496,11 +594,13 @@
          * @returns {HTMLElement}
          */
         function requireElement(id) {
-            const element = document.getElementById(id);
-            if (!element) {
-                throw new Error('Splash: no se encontró el elemento HTML con id "' + id + '"');
-            }
-            return element;
+          const element = document.getElementById(id);
+          if (!element) {
+            throw new Error(
+              'Splash: no se encontró el elemento HTML con id "' + id + '"',
+            );
+          }
+          return element;
         }
 
         /**
@@ -511,12 +611,53 @@
          *          lo valida (un valor inválido se ignora).
          */
         function readSavedOrientation(key) {
-            try {
-                return window.localStorage.getItem(key);
-            } catch (e) {
-                console.log('No se pudo leer localStorage:', e);
-                return null;
-            }
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+            return null;
+          }
+        }
+
+        /**
+         * Lee la opción de ligas guardada por config.html (localStorage).
+         * @param {{storageKey:string, defaultOption:string, options:object}} settings
+         *        Ajustes de ligas (CONFIG.league).
+         * @returns {string} Ligas de la opción guardada ("LIDOM,MLB,..."), o las de la
+         *          opción por defecto si no hay ninguna, es inválida o el WebView no permite localStorage.
+         */
+        function readSavedLeague(settings) {
+          let key = null;
+          try {
+            key = window.localStorage.getItem(settings.storageKey);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+          }
+          if (!Object.prototype.hasOwnProperty.call(settings.options, key)) {
+            key = settings.defaultOption;
+          }
+          return settings.options[key];
+        }
+
+        /**
+         * Lee la escala guardada por config.html (localStorage). Solo se usa
+         * para informarla en el JSON: esta página NO la aplica.
+         * @param {{savedScaleKey:string, savedScaleDefault:number, minScale:number, maxScale:number}} settings
+         *        Ajustes de layout (CONFIG.layout).
+         * @returns {number} Porcentaje guardado, o savedScaleDefault si no hay ninguno,
+         *          es inválido o el WebView no permite localStorage.
+         */
+        function readSavedScale(settings) {
+          let scale = NaN;
+          try {
+            scale = parseInt(window.localStorage.getItem(settings.savedScaleKey), 10);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+          }
+          if (isNaN(scale) || scale < settings.minScale || scale > settings.maxScale) {
+            return settings.savedScaleDefault;
+          }
+          return scale;
         }
 
         /* ==================================================================
@@ -524,49 +665,61 @@
            Responsabilidad: comunicarse con la app Kodular / App Inventor.
            ================================================================== */
         class AppBridge {
-            /**
-             * @param {{origin:string, action:string, status:string}} messageSettings
-             *        Valores fijos del mensaje de salida (CONFIG.message).
-             */
-            constructor(messageSettings) {
-                this.messageSettings = messageSettings;
-            }
+          /**
+           * @param {{origin:string, action:string, status:string}} messageSettings
+           *        Valores fijos del mensaje de salida (CONFIG.message).
+           */
+          constructor(messageSettings) {
+            this.messageSettings = messageSettings;
+          }
 
-            /**
-             * Envía un texto a la app probando 4 métodos, del más específico al
-             * más general. Se usa el primero que esté disponible.
-             * @param {string} message Texto a enviar (normalmente un JSON).
-             */
-            send(message) {
-                try {
-                    if (window.AppInventor && window.AppInventor.setWebViewString) {
-                        window.AppInventor.setWebViewString(message);           // Kodular / AppInventor
-                    } else if (window.android && window.android.onReceiveValue) {
-                        window.android.onReceiveValue(message);                  // Android (versiones nuevas)
-                    } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
-                        window.androidInterface.onReceiveValue(message);         // Interface estándar
-                    } else {
-                        window.postMessage(message, '*');                        // PostMessage para WebView
-                    }
-                } catch (e) {
-                    console.log('Error enviando a AppInventor:', e);
-                }
-                console.log('Enviado a AppInventor:', message);
+          /**
+           * Envía un texto a la app probando 4 métodos, del más específico al
+           * más general. Se usa el primero que esté disponible.
+           * @param {string} message Texto a enviar (normalmente un JSON).
+           */
+          send(message) {
+            try {
+              if (window.AppInventor && window.AppInventor.setWebViewString) {
+                window.AppInventor.setWebViewString(message); // Kodular / AppInventor
+              } else if (window.android && window.android.onReceiveValue) {
+                window.android.onReceiveValue(message); // Android (versiones nuevas)
+              } else if (
+                window.androidInterface &&
+                window.androidInterface.onReceiveValue
+              ) {
+                window.androidInterface.onReceiveValue(message); // Interface estándar
+              } else {
+                window.postMessage(message, "*"); // PostMessage para WebView
+              }
+            } catch (e) {
+              console.log("Error enviando a AppInventor:", e);
             }
+            console.log("Enviado a AppInventor:", message);
+          }
 
-            /**
-             * Avisa a la app que la carga terminó e informa el estado de internet.
-             * Para cambiar el contenido del mensaje de salida, edítalo aquí.
-             * @param {string} internetStatus 'online' u 'offline' (ver INTERNET).
-             */
-            notifyLoadingFinished(internetStatus) {
-                this.send(JSON.stringify({
-                    origin: this.messageSettings.origin,
-                    action: this.messageSettings.action,
-                    status: this.messageSettings.status,
-                    internetStatus: internetStatus   // misma clave que connection/fingerprint
-                }));
-            }
+          /**
+           * Avisa a la app que la carga terminó e informa el estado de internet.
+           * Para cambiar el contenido del mensaje de salida, edítalo aquí.
+           * @param {string} internetStatus 'online' u 'offline' (ver INTERNET).
+           * @param {number} orientation Orientación aplicada (guardada en config.html).
+           * @param {number} scale Escala guardada en config.html (%). Se envía como
+           *        factor de zoom (% / 100), igual que el JSON de "Salir" de config.html.
+           * @param {string} leagues Ligas de la opción guardada en config.html ("LIDOM,MLB,...").
+           */
+          notifyLoadingFinished(internetStatus, orientation, scale, leagues) {
+            this.send(
+              JSON.stringify({
+                origin: this.messageSettings.origin,
+                action: this.messageSettings.action,
+                status: this.messageSettings.status,
+                internetStatus: internetStatus, // misma clave que connection/fingerprint
+                orientation: orientation, // mismas claves que el JSON de "Salir" de config.html
+                scale: scale / 100, // factor de zoom: 80% => 0.8
+                leagues: leagues,
+              }),
+            );
+          }
         }
 
         /* ==================================================================
@@ -577,164 +730,208 @@
            y se valida que su respuesta sea la esperada.
            ================================================================== */
         class InternetChecker {
-            /**
-             * @param {{endpoints:object[], requestTimeoutMs:number, readyTimeoutMs:number}} settings
-             *        Ajustes de internet (CONFIG.internet).
-             */
-            constructor(settings) {
-                this.settings = settings;
-                /** Último resultado: 'online' | 'offline' | null (aún sin resultado). */
-                this.status = null;
-                /** true mientras hay una comprobación en curso. */
-                this.checking = false;
-                /** Funciones que esperan el resultado de la comprobación en curso. */
-                this._waiting = [];
+          /**
+           * @param {{endpoints:object[], requestTimeoutMs:number, readyTimeoutMs:number}} settings
+           *        Ajustes de internet (CONFIG.internet).
+           */
+          constructor(settings) {
+            this.settings = settings;
+            /** Último resultado: 'online' | 'offline' | null (aún sin resultado). */
+            this.status = null;
+            /** true mientras hay una comprobación en curso. */
+            this.checking = false;
+            /** Funciones que esperan el resultado de la comprobación en curso. */
+            this._waiting = [];
+          }
+
+          /**
+           * Inicia una comprobación. Si ya hay una en curso, no hace nada.
+           * Resultado "online" si un endpoint responde con contenido válido;
+           * "offline" si fallan todos (o si el sistema ya reporta sin red).
+           */
+          check() {
+            if (this.checking) {
+              return;
+            }
+            this.checking = true;
+
+            const endpoints = this.settings.endpoints;
+
+            // Sin red según el sistema, o sin endpoints configurados: respuesta inmediata
+            if (navigator.onLine === false) {
+              this._finish(INTERNET.OFFLINE);
+              return;
+            }
+            if (endpoints.length === 0) {
+              this._finish(INTERNET.ONLINE);
+              return;
             }
 
-            /**
-             * Inicia una comprobación. Si ya hay una en curso, no hace nada.
-             * Resultado "online" si un endpoint responde con contenido válido;
-             * "offline" si fallan todos (o si el sistema ya reporta sin red).
-             */
-            check() {
-                if (this.checking) { return; }
-                this.checking = true;
+            let remaining = endpoints.length; // endpoints que aún no han respondido
+            let resolved = false; // true cuando ya se decidió el resultado
 
-                const endpoints = this.settings.endpoints;
-
-                // Sin red según el sistema, o sin endpoints configurados: respuesta inmediata
-                if (navigator.onLine === false) {
-                    this._finish(INTERNET.OFFLINE);
-                    return;
+            endpoints.forEach((endpoint) => {
+              this._ping(endpoint, (ok) => {
+                if (resolved) {
+                  return;
                 }
-                if (endpoints.length === 0) {
-                    this._finish(INTERNET.ONLINE);
-                    return;
+                if (ok) {
+                  resolved = true;
+                  this._finish(INTERNET.ONLINE);
+                } else if (--remaining === 0) {
+                  resolved = true;
+                  this._finish(INTERNET.OFFLINE);
                 }
+              });
+            });
+          }
 
-                let remaining = endpoints.length;   // endpoints que aún no han respondido
-                let resolved = false;               // true cuando ya se decidió el resultado
-
-                endpoints.forEach((endpoint) => {
-                    this._ping(endpoint, (ok) => {
-                        if (resolved) { return; }
-                        if (ok) {
-                            resolved = true;
-                            this._finish(INTERNET.ONLINE);
-                        } else if (--remaining === 0) {
-                            resolved = true;
-                            this._finish(INTERNET.OFFLINE);
-                        }
-                    });
-                });
+          /**
+           * Entrega el resultado de internet a la función recibida.
+           * - Si no hay comprobación en curso: responde de inmediato.
+           * - Si la hay: espera el resultado, pero como máximo readyTimeoutMs;
+           *   pasado ese tiempo usa el último resultado conocido.
+           * @param {function(string):void} callback Recibe 'online' u 'offline'.
+           */
+          whenReady(callback) {
+            if (!this.checking) {
+              callback(this._fallbackStatus());
+              return;
             }
 
-            /**
-             * Entrega el resultado de internet a la función recibida.
-             * - Si no hay comprobación en curso: responde de inmediato.
-             * - Si la hay: espera el resultado, pero como máximo readyTimeoutMs;
-             *   pasado ese tiempo usa el último resultado conocido.
-             * @param {function(string):void} callback Recibe 'online' u 'offline'.
-             */
-            whenReady(callback) {
-                if (!this.checking) {
-                    callback(this._fallbackStatus());
-                    return;
-                }
+            let called = false;
+            const once = (status) => {
+              // garantiza que callback se llame una sola vez
+              if (called) {
+                return;
+              }
+              called = true;
+              callback(status);
+            };
 
-                let called = false;
-                const once = (status) => {   // garantiza que callback se llame una sola vez
-                    if (called) { return; }
-                    called = true;
-                    callback(status);
-                };
+            this._waiting.push(once);
+            setTimeout(
+              () => once(this._fallbackStatus()),
+              this.settings.readyTimeoutMs,
+            );
+          }
 
-                this._waiting.push(once);
-                setTimeout(() => once(this._fallbackStatus()), this.settings.readyTimeoutMs);
-            }
+          /**
+           * Hace UNA petición de prueba a un endpoint y valida su contenido.
+           * @param {{url:string, type:string}} endpoint
+           * @param {function(boolean):void} done Recibe true solo si respondió 200 con el contenido esperado.
+           * @private
+           */
+          _ping(endpoint, done) {
+            let finished = false;
+            let xhr = null;
 
-            /**
-             * Hace UNA petición de prueba a un endpoint y valida su contenido.
-             * @param {{url:string, type:string}} endpoint
-             * @param {function(boolean):void} done Recibe true solo si respondió 200 con el contenido esperado.
-             * @private
-             */
-            _ping(endpoint, done) {
-                let finished = false;
-                let xhr = null;
-
-                const end = (ok) => {        // termina una sola vez (respuesta o tiempo agotado)
-                    if (finished) { return; }
-                    finished = true;
-                    clearTimeout(timer);
-                    if (!ok && xhr) {
-                        try { xhr.abort(); } catch (e) { /* ignorar */ }
-                    }
-                    done(ok);
-                };
-
-                const timer = setTimeout(() => end(false), this.settings.requestTimeoutMs);
-
+            const end = (ok) => {
+              // termina una sola vez (respuesta o tiempo agotado)
+              if (finished) {
+                return;
+              }
+              finished = true;
+              clearTimeout(timer);
+              if (!ok && xhr) {
                 try {
-                    // Parámetro aleatorio para evitar respuestas en caché (falso "online")
-                    const separator = (endpoint.url.indexOf('?') === -1) ? '?' : '&';
-                    const pad = Math.random().toString(36).slice(2, 12);
-                    xhr = new XMLHttpRequest();
-                    xhr.open('GET', endpoint.url + separator + 'random_padding=' + pad, true);
-                    xhr.timeout = this.settings.requestTimeoutMs;
-                    if (endpoint.type === 'dns') { xhr.setRequestHeader('Accept', 'application/dns-json'); }
-                    xhr.onload = () => end(xhr.status === 200 && this._isValid(endpoint.type, xhr.responseText));
-                    xhr.onerror = () => end(false);
-                    xhr.ontimeout = () => end(false);
-                    xhr.onabort = () => end(false);
-                    xhr.send();
+                  xhr.abort();
                 } catch (e) {
-                    end(false);
+                  /* ignorar */
                 }
-            }
+              }
+              done(ok);
+            };
 
-            /**
-             * Comprueba que la respuesta sea realmente la del servidor de internet.
-             * @param {string} type 'dns' | 'ip'
-             * @param {string} text Cuerpo de la respuesta.
-             * @returns {boolean}
-             * @private
-             */
-            _isValid(type, text) {
-                try {
-                    const data = JSON.parse(text);
-                    if (type === 'dns') {
-                        return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
-                    }
-                    if (type === 'ip') {
-                        return !!data && typeof data.ip === 'string' && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
-                    }
-                } catch (e) { /* respuesta no JSON = no es internet real */ }
-                return false;
-            }
+            const timer = setTimeout(
+              () => end(false),
+              this.settings.requestTimeoutMs,
+            );
 
-            /**
-             * Guarda el resultado y avisa a quienes lo esperaban.
-             * @param {string} status 'online' u 'offline'.
-             * @private
-             */
-            _finish(status) {
-                this.status = status;
-                this.checking = false;
-                const waiting = this._waiting;
-                this._waiting = [];
-                waiting.forEach((fn) => fn(status));
+            try {
+              // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+              const separator = endpoint.url.indexOf("?") === -1 ? "?" : "&";
+              const pad = Math.random().toString(36).slice(2, 12);
+              xhr = new XMLHttpRequest();
+              xhr.open(
+                "GET",
+                endpoint.url + separator + "random_padding=" + pad,
+                true,
+              );
+              xhr.timeout = this.settings.requestTimeoutMs;
+              if (endpoint.type === "dns") {
+                xhr.setRequestHeader("Accept", "application/dns-json");
+              }
+              xhr.onload = () =>
+                end(
+                  xhr.status === 200 &&
+                    this._isValid(endpoint.type, xhr.responseText),
+                );
+              xhr.onerror = () => end(false);
+              xhr.ontimeout = () => end(false);
+              xhr.onabort = () => end(false);
+              xhr.send();
+            } catch (e) {
+              end(false);
             }
+          }
 
-            /**
-             * Resultado a usar cuando no hay uno reciente: el último conocido
-             * o, si nunca hubo, lo que indique navigator.onLine.
-             * @returns {string}
-             * @private
-             */
-            _fallbackStatus() {
-                return this.status || (navigator.onLine === false ? INTERNET.OFFLINE : INTERNET.ONLINE);
+          /**
+           * Comprueba que la respuesta sea realmente la del servidor de internet.
+           * @param {string} type 'dns' | 'ip'
+           * @param {string} text Cuerpo de la respuesta.
+           * @returns {boolean}
+           * @private
+           */
+          _isValid(type, text) {
+            try {
+              const data = JSON.parse(text);
+              if (type === "dns") {
+                return (
+                  !!data &&
+                  data.Status === 0 &&
+                  Array.isArray(data.Answer) &&
+                  data.Answer.length > 0
+                );
+              }
+              if (type === "ip") {
+                return (
+                  !!data &&
+                  typeof data.ip === "string" &&
+                  /^[0-9a-fA-F:.]{7,45}$/.test(data.ip)
+                );
+              }
+            } catch (e) {
+              /* respuesta no JSON = no es internet real */
             }
+            return false;
+          }
+
+          /**
+           * Guarda el resultado y avisa a quienes lo esperaban.
+           * @param {string} status 'online' u 'offline'.
+           * @private
+           */
+          _finish(status) {
+            this.status = status;
+            this.checking = false;
+            const waiting = this._waiting;
+            this._waiting = [];
+            waiting.forEach((fn) => fn(status));
+          }
+
+          /**
+           * Resultado a usar cuando no hay uno reciente: el último conocido
+           * o, si nunca hubo, lo que indique navigator.onLine.
+           * @returns {string}
+           * @private
+           */
+          _fallbackStatus() {
+            return (
+              this.status ||
+              (navigator.onLine === false ? INTERNET.OFFLINE : INTERNET.ONLINE)
+            );
+          }
         }
 
         /* ==================================================================
@@ -750,100 +947,116 @@
              - #scaler escala el contenido desde su centro.
            ================================================================== */
         class LayoutManager {
-            /**
-             * @param {HTMLElement} stageElement  Elemento #stage (rotación).
-             * @param {HTMLElement} scalerElement Elemento #scaler (tamaño).
-             * @param {object} settings           Ajustes de layout (CONFIG.layout).
-             */
-            constructor(stageElement, scalerElement, settings) {
-                this.stage = stageElement;
-                this.scaler = scalerElement;
-                this.settings = settings;
-                /** Rotación actual en grados: 0, 90, 180 o 270. */
-                this.orientation = settings.defaultOrientation;
-                /** Tamaño actual en porcentaje. */
-                this.scale = settings.defaultScale;
+          /**
+           * @param {HTMLElement} stageElement  Elemento #stage (rotación).
+           * @param {HTMLElement} scalerElement Elemento #scaler (tamaño).
+           * @param {object} settings           Ajustes de layout (CONFIG.layout).
+           */
+          constructor(stageElement, scalerElement, settings) {
+            this.stage = stageElement;
+            this.scaler = scalerElement;
+            this.settings = settings;
+            /** Rotación actual en grados: 0, 90, 180 o 270. */
+            this.orientation = settings.defaultOrientation;
+            /** Tamaño actual en porcentaje. */
+            this.scale = settings.defaultScale;
+          }
+
+          /**
+           * Cambia la orientación si el valor es válido; si no, la deja igual.
+           * Acepta números o textos numéricos. 360 se trata como 0 y los
+           * negativos se normalizan (-90 equivale a 270).
+           * @param {number|string} value Grados.
+           * @returns {boolean} true si se cambió la orientación.
+           */
+          setOrientation(value) {
+            if (value === undefined || value === null) {
+              return false;
             }
 
-            /**
-             * Cambia la orientación si el valor es válido; si no, la deja igual.
-             * Acepta números o textos numéricos. 360 se trata como 0 y los
-             * negativos se normalizan (-90 equivale a 270).
-             * @param {number|string} value Grados.
-             * @returns {boolean} true si se cambió la orientación.
-             */
-            setOrientation(value) {
-                if (value === undefined || value === null) { return false; }
-
-                let degrees = parseInt(value, 10);
-                if (isNaN(degrees)) { return false; }
-
-                degrees = ((degrees % 360) + 360) % 360;   // lleva cualquier valor al rango 0-359
-                if (this.settings.allowedOrientations.indexOf(degrees) === -1) { return false; }
-
-                this.orientation = degrees;
-                return true;
+            let degrees = parseInt(value, 10);
+            if (isNaN(degrees)) {
+              return false;
             }
 
-            /**
-             * Cambia el tamaño si el valor es válido; si no, lo deja igual.
-             * El valor se limita entre minScale y maxScale.
-             * @param {number|string} value Porcentaje (100 = tamaño normal).
-             * @returns {boolean} true si se cambió el tamaño.
-             */
-            setScale(value) {
-                if (value === undefined || value === null) { return false; }
-
-                const percent = parseFloat(value);
-                if (!isFinite(percent) || percent <= 0) { return false; }
-
-                this.scale = Math.min(this.settings.maxScale, Math.max(this.settings.minScale, percent));
-                return true;
+            degrees = ((degrees % 360) + 360) % 360; // lleva cualquier valor al rango 0-359
+            if (this.settings.allowedOrientations.indexOf(degrees) === -1) {
+              return false;
             }
 
-            /**
-             * Aplica al HTML la orientación y el tamaño actuales.
-             * Se llama al iniciar, al cambiar las opciones y cuando cambia
-             * el tamaño de la ventana.
-             */
-            apply() {
-                const width = window.innerWidth || document.documentElement.clientWidth;
-                const height = window.innerHeight || document.documentElement.clientHeight;
+            this.orientation = degrees;
+            return true;
+          }
 
-                let stageWidth = width;
-                let stageHeight = height;
-                let transform = 'none';
-
-                // Para cada giro: medidas del escenario y desplazamiento que lo devuelve a la pantalla
-                if (this.orientation === 90) {
-                    stageWidth = height;
-                    stageHeight = width;
-                    transform = 'translate(' + width + 'px, 0px) rotate(90deg)';
-                } else if (this.orientation === 180) {
-                    transform = 'translate(' + width + 'px, ' + height + 'px) rotate(180deg)';
-                } else if (this.orientation === 270) {
-                    stageWidth = height;
-                    stageHeight = width;
-                    transform = 'translate(0px, ' + height + 'px) rotate(270deg)';
-                }
-
-                this.stage.style.width = stageWidth + 'px';
-                this.stage.style.height = stageHeight + 'px';
-                this.stage.style.transformOrigin = '0 0';
-                this.stage.style.transform = transform;
-                this.scaler.style.transformOrigin = '50% 50%';
-                this.scaler.style.transform = 'scale(' + (this.scale / 100) + ')';
+          /**
+           * Cambia el tamaño si el valor es válido; si no, lo deja igual.
+           * El valor se limita entre minScale y maxScale.
+           * @param {number|string} value Porcentaje (100 = tamaño normal).
+           * @returns {boolean} true si se cambió el tamaño.
+           */
+          setScale(value) {
+            if (value === undefined || value === null) {
+              return false;
             }
 
-            /**
-             * Recalcula el layout cuando la ventana cambia de tamaño o el
-             * dispositivo gira físicamente.
-             */
-            listenToWindowChanges() {
-                const reapply = () => this.apply();
-                window.addEventListener('resize', reapply);
-                window.addEventListener('orientationchange', reapply);
+            const percent = parseFloat(value);
+            if (!isFinite(percent) || percent <= 0) {
+              return false;
             }
+
+            this.scale = Math.min(
+              this.settings.maxScale,
+              Math.max(this.settings.minScale, percent),
+            );
+            return true;
+          }
+
+          /**
+           * Aplica al HTML la orientación y el tamaño actuales.
+           * Se llama al iniciar, al cambiar las opciones y cuando cambia
+           * el tamaño de la ventana.
+           */
+          apply() {
+            const width =
+              window.innerWidth || document.documentElement.clientWidth;
+            const height =
+              window.innerHeight || document.documentElement.clientHeight;
+
+            let stageWidth = width;
+            let stageHeight = height;
+            let transform = "none";
+
+            // Para cada giro: medidas del escenario y desplazamiento que lo devuelve a la pantalla
+            if (this.orientation === 90) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (this.orientation === 180) {
+              transform =
+                "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (this.orientation === 270) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+
+            this.stage.style.width = stageWidth + "px";
+            this.stage.style.height = stageHeight + "px";
+            this.stage.style.transformOrigin = "0 0";
+            this.stage.style.transform = transform;
+            this.scaler.style.transformOrigin = "50% 50%";
+            this.scaler.style.transform = "scale(" + this.scale / 100 + ")";
+          }
+
+          /**
+           * Recalcula el layout cuando la ventana cambia de tamaño o el
+           * dispositivo gira físicamente.
+           */
+          listenToWindowChanges() {
+            const reapply = () => this.apply();
+            window.addEventListener("resize", reapply);
+            window.addEventListener("orientationchange", reapply);
+          }
         }
 
         /* ==================================================================
@@ -852,40 +1065,40 @@
            Un dato que no llega no se escribe, y el CSS oculta el campo vacío.
            ================================================================== */
         class InfoPanel {
-            /**
-             * @param {object} elements Elementos HTML de cada dato.
-             * @param {HTMLElement} elements.version
-             * @param {HTMLElement} elements.url
-             * @param {HTMLElement} elements.email
-             * @param {HTMLElement} elements.id
-             */
-            constructor(elements) {
-                this.elements = elements;
-            }
+          /**
+           * @param {object} elements Elementos HTML de cada dato.
+           * @param {HTMLElement} elements.version
+           * @param {HTMLElement} elements.url
+           * @param {HTMLElement} elements.email
+           * @param {HTMLElement} elements.id
+           */
+          constructor(elements) {
+            this.elements = elements;
+          }
 
-            /**
-             * Muestra los datos recibidos. Solo escribe los que traen valor.
-             * @param {{version?:string, url?:string, email?:string, id?:string}} data
-             */
-            show(data) {
-                this._setText(this.elements.version, 'Versión: ', data.version);
-                this._setText(this.elements.url, '', data.url);
-                this._setText(this.elements.email, '', data.email);
-                this._setText(this.elements.id, 'Id: ', data.id);
-            }
+          /**
+           * Muestra los datos recibidos. Solo escribe los que traen valor.
+           * @param {{version?:string, url?:string, email?:string, id?:string}} data
+           */
+          show(data) {
+            this._setText(this.elements.version, "Versión: ", data.version);
+            this._setText(this.elements.url, "", data.url);
+            this._setText(this.elements.email, "", data.email);
+            this._setText(this.elements.id, "Id: ", data.id);
+          }
 
-            /**
-             * Escribe "prefijo + valor" en un elemento, solo si hay valor.
-             * @param {HTMLElement} element
-             * @param {string} prefix Texto que va antes del valor (puede ser '').
-             * @param {*} value       Valor recibido (undefined, null o '' se ignoran).
-             * @private
-             */
-            _setText(element, prefix, value) {
-                if (value !== undefined && value !== null && String(value) !== '') {
-                    element.textContent = prefix + String(value);
-                }
+          /**
+           * Escribe "prefijo + valor" en un elemento, solo si hay valor.
+           * @param {HTMLElement} element
+           * @param {string} prefix Texto que va antes del valor (puede ser '').
+           * @param {*} value       Valor recibido (undefined, null o '' se ignoran).
+           * @private
+           */
+          _setText(element, prefix, value) {
+            if (value !== undefined && value !== null && String(value) !== "") {
+              element.textContent = prefix + String(value);
             }
+          }
         }
 
         /* ==================================================================
@@ -895,106 +1108,119 @@
            mediante callbacks, lo que facilita modificarla por separado.
            ================================================================== */
         class LoadingAnimation {
-            /**
-             * @param {object} elements
-             * @param {HTMLElement} elements.bar       Barra (#loadingBar).
-             * @param {HTMLElement} elements.text      Texto de progreso (#progressText).
-             * @param {HTMLElement} elements.stepsBox  Caja de pasos (#loadingSteps).
-             * @param {HTMLElement[]} elements.steps   Pasos, en orden (step1, step2...).
-             * @param {object} settings Ajustes de animación (CONFIG.animation).
-             * @param {{active:string, done:string}} cssClasses Clases CSS (CONFIG.cssClasses).
-             */
-            constructor(elements, settings, cssClasses) {
-                this.elements = elements;
-                this.settings = settings;
-                this.cssClasses = cssClasses;
+          /**
+           * @param {object} elements
+           * @param {HTMLElement} elements.bar       Barra (#loadingBar).
+           * @param {HTMLElement} elements.text      Texto de progreso (#progressText).
+           * @param {HTMLElement} elements.stepsBox  Caja de pasos (#loadingSteps).
+           * @param {HTMLElement[]} elements.steps   Pasos, en orden (step1, step2...).
+           * @param {object} settings Ajustes de animación (CONFIG.animation).
+           * @param {{active:string, done:string}} cssClasses Clases CSS (CONFIG.cssClasses).
+           */
+          constructor(elements, settings, cssClasses) {
+            this.elements = elements;
+            this.settings = settings;
+            this.cssClasses = cssClasses;
+            this._timer = null;
+            /** Último texto y cantidad de pasos dibujados: solo se toca el DOM si cambian. */
+            this._lastText = null;
+            this._lastReached = -1;
+          }
+
+          /**
+           * Inicia la animación. Cada tickMs actualiza la barra, el texto y
+           * los pasos, y avisa el avance. Al llegar a 100% se detiene.
+           * @param {function(number):void} onProgress Recibe el porcentaje (0 a 100) en cada actualización.
+           * @param {function():void} onComplete       Se llama una vez al llegar a 100%.
+           */
+          start(onProgress, onComplete) {
+            if (this._timer) {
+              return;
+            } // ya está corriendo
+
+            const startTime = Date.now();
+
+            this._timer = setInterval(() => {
+              const elapsed = Date.now() - startTime;
+              const percent = Math.min(
+                100,
+                (elapsed / this.settings.durationMs) * 100,
+              );
+
+              this._render(percent);
+              onProgress(percent);
+
+              if (percent >= 100) {
+                clearInterval(this._timer);
                 this._timer = null;
-                /** Último texto y cantidad de pasos dibujados: solo se toca el DOM si cambian. */
-                this._lastText = null;
-                this._lastReached = -1;
+                onComplete();
+              }
+            }, this.settings.tickMs);
+          }
+
+          /**
+           * Marca la animación como terminada (detiene los puntos "...").
+           */
+          markAsFinished() {
+            this.elements.stepsBox.classList.add(this.cssClasses.done);
+          }
+
+          /**
+           * Dibuja el estado visual correspondiente a un porcentaje.
+           * @param {number} percent 0 a 100.
+           * @private
+           */
+          _render(percent) {
+            // transform no recalcula el layout: solo la GPU recompone la barra
+            this.elements.bar.style.transform =
+              "scaleX(" + (percent / 100).toFixed(3) + ")";
+
+            const text = this._textFor(percent);
+            if (text !== this._lastText) {
+              this._lastText = text;
+              this.elements.text.textContent = text;
             }
+            this._updateSteps(percent);
+          }
 
-            /**
-             * Inicia la animación. Cada tickMs actualiza la barra, el texto y
-             * los pasos, y avisa el avance. Al llegar a 100% se detiene.
-             * @param {function(number):void} onProgress Recibe el porcentaje (0 a 100) en cada actualización.
-             * @param {function():void} onComplete       Se llama una vez al llegar a 100%.
-             */
-            start(onProgress, onComplete) {
-                if (this._timer) { return; }   // ya está corriendo
-
-                const startTime = Date.now();
-
-                this._timer = setInterval(() => {
-                    const elapsed = Date.now() - startTime;
-                    const percent = Math.min(100, (elapsed / this.settings.durationMs) * 100);
-
-                    this._render(percent);
-                    onProgress(percent);
-
-                    if (percent >= 100) {
-                        clearInterval(this._timer);
-                        this._timer = null;
-                        onComplete();
-                    }
-                }, this.settings.tickMs);
+          /**
+           * Elige el texto de progreso según el porcentaje (ver CONFIG.animation.progressTexts).
+           * @param {number} percent
+           * @returns {string}
+           * @private
+           */
+          _textFor(percent) {
+            const texts = this.settings.progressTexts;
+            for (let i = 0; i < texts.length; i++) {
+              if (percent < texts[i].below) {
+                return texts[i].text;
+              }
             }
+            return texts[texts.length - 1].text;
+          }
 
-            /**
-             * Marca la animación como terminada (detiene los puntos "...").
-             */
-            markAsFinished() {
-                this.elements.stepsBox.classList.add(this.cssClasses.done);
+          /**
+           * Enciende los pasos alcanzados y apaga el resto. Con 4 pasos:
+           * paso 1 desde 0%, paso 2 desde 25%, paso 3 desde 50%, paso 4 desde 75%.
+           * Solo actúa cuando cambia la cantidad de pasos alcanzados.
+           * @param {number} percent
+           * @private
+           */
+          _updateSteps(percent) {
+            const stepSize = 100 / this.settings.totalSteps;
+            const reached = Math.floor(percent / stepSize) + 1; // cantidad de pasos encendidos
+            if (reached === this._lastReached) {
+              return;
             }
+            this._lastReached = reached;
 
-            /**
-             * Dibuja el estado visual correspondiente a un porcentaje.
-             * @param {number} percent 0 a 100.
-             * @private
-             */
-            _render(percent) {
-                // transform no recalcula el layout: solo la GPU recompone la barra
-                this.elements.bar.style.transform = 'scaleX(' + (percent / 100).toFixed(3) + ')';
-
-                const text = this._textFor(percent);
-                if (text !== this._lastText) {
-                    this._lastText = text;
-                    this.elements.text.textContent = text;
-                }
-                this._updateSteps(percent);
-            }
-
-            /**
-             * Elige el texto de progreso según el porcentaje (ver CONFIG.animation.progressTexts).
-             * @param {number} percent
-             * @returns {string}
-             * @private
-             */
-            _textFor(percent) {
-                const texts = this.settings.progressTexts;
-                for (let i = 0; i < texts.length; i++) {
-                    if (percent < texts[i].below) { return texts[i].text; }
-                }
-                return texts[texts.length - 1].text;
-            }
-
-            /**
-             * Enciende los pasos alcanzados y apaga el resto. Con 4 pasos:
-             * paso 1 desde 0%, paso 2 desde 25%, paso 3 desde 50%, paso 4 desde 75%.
-             * Solo actúa cuando cambia la cantidad de pasos alcanzados.
-             * @param {number} percent
-             * @private
-             */
-            _updateSteps(percent) {
-                const stepSize = 100 / this.settings.totalSteps;
-                const reached = Math.floor(percent / stepSize) + 1;   // cantidad de pasos encendidos
-                if (reached === this._lastReached) { return; }
-                this._lastReached = reached;
-
-                this.elements.steps.forEach((step, index) => {
-                    step.classList.toggle(this.cssClasses.active, index + 1 <= reached);
-                });
-            }
+            this.elements.steps.forEach((step, index) => {
+              step.classList.toggle(
+                this.cssClasses.active,
+                index + 1 <= reached,
+              );
+            });
+          }
         }
 
         /* ==================================================================
@@ -1009,176 +1235,196 @@
              _handleFinished() => espera internet, avisa a la app, fundido y bienvenida
            ================================================================== */
         class SplashScreen {
-            /**
-             * Crea todas las piezas a partir de CONFIG y del HTML.
-             * @param {object} config Objeto CONFIG.
-             */
-            constructor(config) {
-                this.config = config;
-                const ids = config.ids;
+          /**
+           * Crea todas las piezas a partir de CONFIG y del HTML.
+           * @param {object} config Objeto CONFIG.
+           */
+          constructor(config) {
+            this.config = config;
+            const ids = config.ids;
 
-                // Elementos principales
-                this.container = requireElement(ids.splashContainer);
-                this.welcome = requireElement(ids.welcome);
+            // Elementos principales
+            this.container = requireElement(ids.splashContainer);
+            this.welcome = requireElement(ids.welcome);
 
-                // Colaboradores (cada clase con una única responsabilidad)
-                this.bridge = new AppBridge(config.message);
-                this.internet = new InternetChecker(config.internet);
-                this.layout = new LayoutManager(
-                    requireElement(ids.stage),
-                    requireElement(ids.scaler),
-                    config.layout
-                );
-                this.info = new InfoPanel({
-                    version: requireElement(ids.versionText),
-                    url: requireElement(ids.websiteUrl),
-                    email: requireElement(ids.emailContact),
-                    id: requireElement(ids.systemId)
-                });
-                this.animation = new LoadingAnimation(
-                    {
-                        bar: requireElement(ids.loadingBar),
-                        text: requireElement(ids.progressText),
-                        stepsBox: requireElement(ids.loadingSteps),
-                        steps: this._findSteps(config.animation.totalSteps, ids.stepPrefix)
-                    },
-                    config.animation,
-                    config.cssClasses
-                );
+            // Colaboradores (cada clase con una única responsabilidad)
+            this.bridge = new AppBridge(config.message);
+            this.internet = new InternetChecker(config.internet);
+            this.layout = new LayoutManager(
+              requireElement(ids.stage),
+              requireElement(ids.scaler),
+              config.layout,
+            );
+            this.info = new InfoPanel({
+              version: requireElement(ids.versionText),
+              url: requireElement(ids.websiteUrl),
+              email: requireElement(ids.emailContact),
+              id: requireElement(ids.systemId),
+            });
+            this.animation = new LoadingAnimation(
+              {
+                bar: requireElement(ids.loadingBar),
+                text: requireElement(ids.progressText),
+                stepsBox: requireElement(ids.loadingSteps),
+                steps: this._findSteps(
+                  config.animation.totalSteps,
+                  ids.stepPrefix,
+                ),
+              },
+              config.animation,
+              config.cssClasses,
+            );
 
-                /** true cuando la animación ya arrancó (evita iniciarla dos veces). */
-                this.started = false;
-                /** Temporizador de la espera de datos. */
-                this._waitTimer = null;
-                /** true cuando ya se hizo la segunda comprobación de internet. */
-                this._rechecked = false;
-            }
+            /** true cuando la animación ya arrancó (evita iniciarla dos veces). */
+            this.started = false;
+            /** Temporizador de la espera de datos. */
+            this._waitTimer = null;
+            /** true cuando ya se hizo la segunda comprobación de internet. */
+            this._rechecked = false;
+          }
 
-            /**
-             * Arranca la pantalla: aplica la orientación guardada en config.html,
-             * y espera los datos. Si en dataWaitMs no llega updateData(), inicia igualmente.
-             */
-            init() {
-                const key = this.config.layout.orientationKey;
-                this.layout.setOrientation(readSavedOrientation(key));
+          /**
+           * Arranca la pantalla: aplica la orientación guardada en config.html,
+           * y espera los datos. Si en dataWaitMs no llega updateData(), inicia igualmente.
+           */
+          init() {
+            const key = this.config.layout.orientationKey;
+            this.layout.setOrientation(readSavedOrientation(key));
+            this.layout.apply();
+            this.layout.listenToWindowChanges();
+
+            // Si config.html guarda otra orientación mientras esta página está
+            // abierta (en otro WebView), se aplica al momento
+            window.addEventListener("storage", (e) => {
+              if (e.key === key && this.layout.setOrientation(e.newValue)) {
                 this.layout.apply();
-                this.layout.listenToWindowChanges();
+              }
+            });
 
-                // Si config.html guarda otra orientación mientras esta página está
-                // abierta (en otro WebView), se aplica al momento
-                window.addEventListener('storage', (e) => {
-                    if (e.key === key && this.layout.setOrientation(e.newValue)) {
-                        this.layout.apply();
-                    }
-                });
+            this._waitTimer = setTimeout(
+              () => this._startLoading(),
+              this.config.dataWaitMs,
+            );
+          }
 
-                this._waitTimer = setTimeout(() => this._startLoading(), this.config.dataWaitMs);
+          /**
+           * Punto de entrada de los datos. La app lo llama mediante la función
+           * global updateData(...).
+           * Si el JSON es inválido se ignora y se sigue esperando (el temporizador
+           * de init() hará que la animación inicie igual).
+           * @param {string|object} jsonData Texto JSON u objeto con los datos.
+           */
+          updateData(jsonData) {
+            let data;
+            try {
+              data =
+                typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
+            } catch (e) {
+              console.log("updateData: JSON inválido", e);
+              return;
+            }
+            if (!data || typeof data !== "object") {
+              return;
             }
 
-            /**
-             * Punto de entrada de los datos. La app lo llama mediante la función
-             * global updateData(...).
-             * Si el JSON es inválido se ignora y se sigue esperando (el temporizador
-             * de init() hará que la animación inicie igual).
-             * @param {string|object} jsonData Texto JSON u objeto con los datos.
-             */
-            updateData(jsonData) {
-                let data;
-                try {
-                    data = (typeof jsonData === 'string') ? JSON.parse(jsonData) : jsonData;
-                } catch (e) {
-                    console.log('updateData: JSON inválido', e);
-                    return;
-                }
-                if (!data || typeof data !== 'object') { return; }
+            // 1) Mostrar los textos que llegaron
+            this.info.show(data);
 
-                // 1) Mostrar los textos que llegaron
-                this.info.show(data);
+            // 2) Aplicar el tamaño si vino (la orientación NO: se lee de config.html)
+            this.layout.setScale(data.scale);
+            this.layout.apply();
 
-                // 2) Aplicar el tamaño si vino (la orientación NO: se lee de config.html)
-                this.layout.setScale(data.scale);
-                this.layout.apply();
+            // 3) Ya hay datos: iniciar la animación sin esperar más
+            this._startLoading();
+          }
 
-                // 3) Ya hay datos: iniciar la animación sin esperar más
-                this._startLoading();
+          /**
+           * Inicia la animación y la comprobación de internet (una sola vez).
+           * @private
+           */
+          _startLoading() {
+            if (this.started) {
+              return;
+            }
+            this.started = true;
+
+            if (this._waitTimer) {
+              clearTimeout(this._waitTimer);
+              this._waitTimer = null;
             }
 
-            /**
-             * Inicia la animación y la comprobación de internet (una sola vez).
-             * @private
-             */
-            _startLoading() {
-                if (this.started) { return; }
-                this.started = true;
+            this.internet.check(); // primera comprobación, mientras corre la animación
 
-                if (this._waitTimer) {
-                    clearTimeout(this._waitTimer);
-                    this._waitTimer = null;
-                }
+            this.animation.start(
+              (percent) => this._handleProgress(percent),
+              () => this._handleFinished(),
+            );
+          }
 
-                this.internet.check();   // primera comprobación, mientras corre la animación
-
-                this.animation.start(
-                    (percent) => this._handleProgress(percent),
-                    () => this._handleFinished()
-                );
+          /**
+           * Se ejecuta en cada avance de la animación. Al llegar al porcentaje
+           * configurado repite la comprobación de internet para tener un dato
+           * más reciente al terminar.
+           * @param {number} percent
+           * @private
+           */
+          _handleProgress(percent) {
+            if (
+              !this._rechecked &&
+              percent >= this.config.animation.recheckInternetAtPercent
+            ) {
+              this._rechecked = true;
+              this.internet.check();
             }
+          }
 
-            /**
-             * Se ejecuta en cada avance de la animación. Al llegar al porcentaje
-             * configurado repite la comprobación de internet para tener un dato
-             * más reciente al terminar.
-             * @param {number} percent
-             * @private
-             */
-            _handleProgress(percent) {
-                if (!this._rechecked && percent >= this.config.animation.recheckInternetAtPercent) {
-                    this._rechecked = true;
-                    this.internet.check();
-                }
+          /**
+           * Se ejecuta al llegar la animación a 100%: obtiene el estado de
+           * internet, avisa a la app y muestra la pantalla de bienvenida.
+           * @private
+           */
+          _handleFinished() {
+            this.animation.markAsFinished();
+
+            this.internet.whenReady((status) => {
+              // Se lee al final por si config.html guardó otra opción mientras tanto
+              this.bridge.notifyLoadingFinished(
+                status,
+                this.layout.orientation,
+                readSavedScale(this.config.layout),
+                readSavedLeague(this.config.league),
+              );
+              this._fadeOutAndShowWelcome();
+            });
+          }
+
+          /**
+           * Desvanece la tarjeta de carga y luego muestra la bienvenida.
+           * @private
+           */
+          _fadeOutAndShowWelcome() {
+            this.container.classList.add(this.config.cssClasses.fadeOut);
+
+            setTimeout(() => {
+              this.container.style.display = "none";
+              this.welcome.style.display = "block";
+            }, this.config.fadeOutMs);
+          }
+
+          /**
+           * Busca los pasos #step1, #step2... y los devuelve en orden.
+           * @param {number} total   Cantidad de pasos.
+           * @param {string} prefix  Prefijo del id (ej. 'step').
+           * @returns {HTMLElement[]}
+           * @private
+           */
+          _findSteps(total, prefix) {
+            const steps = [];
+            for (let i = 1; i <= total; i++) {
+              steps.push(requireElement(prefix + i));
             }
-
-            /**
-             * Se ejecuta al llegar la animación a 100%: obtiene el estado de
-             * internet, avisa a la app y muestra la pantalla de bienvenida.
-             * @private
-             */
-            _handleFinished() {
-                this.animation.markAsFinished();
-
-                this.internet.whenReady((status) => {
-                    this.bridge.notifyLoadingFinished(status);
-                    this._fadeOutAndShowWelcome();
-                });
-            }
-
-            /**
-             * Desvanece la tarjeta de carga y luego muestra la bienvenida.
-             * @private
-             */
-            _fadeOutAndShowWelcome() {
-                this.container.classList.add(this.config.cssClasses.fadeOut);
-
-                setTimeout(() => {
-                    this.container.style.display = 'none';
-                    this.welcome.style.display = 'block';
-                }, this.config.fadeOutMs);
-            }
-
-            /**
-             * Busca los pasos #step1, #step2... y los devuelve en orden.
-             * @param {number} total   Cantidad de pasos.
-             * @param {string} prefix  Prefijo del id (ej. 'step').
-             * @returns {HTMLElement[]}
-             * @private
-             */
-            _findSteps(total, prefix) {
-                const steps = [];
-                for (let i = 1; i <= total; i++) {
-                    steps.push(requireElement(prefix + i));
-                }
-                return steps;
-            }
+            return steps;
+          }
         }
 
         /* ==================================================================
@@ -1195,15 +1441,17 @@
          * @param {string|object} jsonData
          */
         window.updateData = function (jsonData) {
-            splash.updateData(jsonData);
+          splash.updateData(jsonData);
         };
 
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function () { splash.init(); });
-        } else {
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", function () {
             splash.init();
+          });
+        } else {
+          splash.init();
         }
-    })();
+      })();
     </script>
-</body>
+  </body>
 </html>

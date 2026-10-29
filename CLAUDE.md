@@ -36,16 +36,19 @@ Las pantallas que lo admiten reciben mediante `updateData()`:
 
 - `smartpizarra.orientation`: orientación guardada, `0`, `90`, `180` o `270`.
 - `smartpizarra.league`: opción guardada por `config.html` (`mlb`, `nba`, `nflnhl` o `none`).
+- `smartpizarra.scale`: escala en % guardada por `config.html` (10–300, botones −/+ de 5 en 5; 60 por defecto = zoom `0.6`, definido en `DEFAULT_CONFIG.scale` de config.html y `savedScaleDefault` de las otras tres pantallas, que deben coincidir; no confundir con `defaultScale`, que es el tamaño visual 100). **Solo se informa en los JSON; ninguna pantalla la aplica.** En los JSON viaja como **factor de zoom** (`% / 100`: 80% → `0.8`), porque la app lo usa como `z` en `document.body.style.zoom = z` de su código de giro/zoom de otra página. En `localStorage` se guarda en % entero. La escala visual de las pantallas sigue llegando por `updateData({scale})`.
 - La orientación por defecto es `0°` si no existe un valor guardado.
 - Las pantallas de contenido usan `#stage` / `#scaler` y un gestor de layout para rotación y escala. Conserva el comportamiento de ajuste a pantalla.
-- `config.html` ofrece las categorías MLB, NBA, NFL & NHL y NINGUNO; al salir incluye la liga seleccionada y la lista de ligas correspondiente.
+- `config.html` ofrece las categorías MLB, NBA, NFL & NHL y NINGUNO; al salir incluye solo la lista de ligas de la opción seleccionada (`leagues`).
 
 ## Mensajes de salida conocidos
 
-- `config.html`: un solo mensaje al salir: `origin:"config"`, `action:"exit"`; incluye `status` (`saved`, `unchanged` o `error`), `internetStatus`, `orientation`, `league` y `leagues`.
+- `config.html`: un solo mensaje al salir: `origin:"config"`, `action:"exit"`; incluye `status` (`saved`, `unchanged` o `error`), `internetStatus`, `orientation`, `scale` y `leagues`.
 - `loading.html`: al completar la carga envía `origin:"loadingPage"`, `action:"loading"`, `status:"true"` e `internetStatus`.
 - `connection.html`: al iniciar envía `origin:"connection_status"`, `action:"info"`; después informa el estado con `action:"connection"`.
 - `fingerprint.html`: envía eventos como `info`, `qr_generated`, `qr_error`, `id_empty` y `connection`. Respeta las mayúsculas/minúsculas de `origin` y los valores del archivo; por ejemplo, `fingerPrint` aparece con esa capitalización en sus eventos del QR.
+
+- **Configuración compartida:** solo `config.html` escribe `smartpizarra.orientation`, `smartpizarra.league` y `smartpizarra.scale`. `loading.html`, `connection.html` y `fingerprint.html` solo las leen y agregan `orientation`, `scale` y `leagues` a **todos** sus mensajes (las mismas claves que el JSON de "Salir"). No se envía el tipo de liga (`league`/etiqueta), solo `leagues` con el listado. El listado está copiado en los cuatro archivos (`LEAGUE_OPTIONS[...].values` / `CONFIG.league.options` / `LEAGUE_CONFIG.options`) y debe ser idéntico en todos.
 
 Consulta el JSON construido en el código antes de cambiar un contrato; los ejemplos de arriba son un resumen, no sustituyen el código.
 
