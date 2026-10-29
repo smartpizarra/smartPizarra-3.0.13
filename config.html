@@ -57,7 +57,7 @@
   - Sin backdrop-filter ni filter (pesados en GPU de TV box).
 
   FLUJO GENERAL
-  1. init(): lee la orientación (0° si no hay ninguna) y las ligas
+  1. init(): lee la orientación (90° si no hay ninguna) y las ligas
      (NINGUNO si no hay ninguna) guardadas, las aplica, dibuja la UI y
      pone el foco en la orientación actual. No envía nada a la app.
   2. La app puede llamar a updateData({"version":..., ...}) para
@@ -672,7 +672,7 @@
             label: "NFL & NHL",
             values: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
           },
-          none: { label: "NINGUNO", values: "none" },
+          none: { label: "NINGUNO", values: "" },
         };
 
         /** Límites y paso (en %) de la escala que se elige con − / +.

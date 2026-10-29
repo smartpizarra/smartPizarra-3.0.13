@@ -11,8 +11,9 @@
     - Pide el ID a la app (Kodular / App Inventor) al arrancar.
     - Cuando la app responde con el ID, dibuja el QR y le devuelve un
       token codificado.
-    - Vigila la conexión a internet; sin internet muestra un aviso y
-      lo informa a la app cada 2 segundos.
+    - Vigila la conexión a internet; sin internet muestra un aviso
+      (conservando el ID y su QR) e informa a la app solo cuando se
+      pierde y cuando se recupera la conexión.
     - Vigila que el QR siga visible (algunas GPU de TV box lo borran)
       y lo vuelve a dibujar si desaparece.
     - Protege la pantalla contra el quemado (burn-in) porque puede
@@ -38,8 +39,11 @@
   3. La app responde llamando a updateData({"id":"..."}) o setCode("...").
   4. Se muestra el ID, se dibuja el QR y se envía "qr_generated" con el token.
   5. Mientras tanto se verifica internet periódicamente:
-       - Al perderlo: aviso en pantalla y mensaje "offline" cada 2 s.
-       - Al recuperarlo: mensaje "online" y se vuelve a pedir el ID.
+       - Al perderlo: aviso en pantalla y UN mensaje "offline". El ID y su
+         QR se conservan en pantalla.
+       - Al recuperarlo: UN mensaje "online"; se conserva el ID (solo se
+         pide a la app si aún no había llegado).
+       No se envía nada mientras el estado no cambia.
 
   CONTRATO DE ENTRADA
     updateData(json)   La app llama: updateData('{"id":"ABC123", ... }')
@@ -56,7 +60,7 @@
   La orientación se elige y se guarda en config.html. Esta página la
   lee al abrirse del almacenamiento local del WebView (localStorage,
   clave "smartpizarra.orientation"). Si nunca se guardó ninguna, usa
-  0° (LAYOUT_CONFIG.defaultOrientation). Si llega "orientation" por
+  90° (LAYOUT_CONFIG.defaultOrientation). Si llega "orientation" por
   updateData, se ignora.
 
   CONTRATO DE SALIDA: mensajes enviados a la app
@@ -73,7 +77,8 @@
        "internetStatus":"online","token":""}
     Llegó un ID vacío (se vuelve a pedir a los 2 s):
       {"origin":"fingerPrint","action":"id_empty","status":"error","internetStatus":"online"}
-    Cambio de conexión (y cada 2 s mientras no hay internet):
+    Cambio de conexión (solo al perder y al recuperar internet, y
+    cuando la app llama a checkConnection/checkConnectionAsync):
       {"origin":"loading","action":"connection","status":"offline",
        "internetStatus":"offline","latency":0,"localNetwork":true,
        "checkedAt":"2026-10-26T17:41:11.909Z"}
@@ -83,7 +88,7 @@
     localStorage en cada envío (ver withSavedConfig):
       "orientation":90,"scale":0.8,
       "leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"
-    Si nunca se guardó nada: 0, 0.6 y "none". "scale" es la escala
+    Si nunca se guardó nada: 90, 0.6 y "none". "scale" es la escala
     GUARDADA en config.html como factor de zoom (% / 100: 80% => 0.8)
     y solo se informa: no es la que se aplica en pantalla (esa llega
     por updateData, en %). Esta página no
@@ -122,8 +127,8 @@
   COMO MODIFICAR (guía rápida)
     Tiempos de verificación de internet o servidores de prueba
       => CONNECTION_CONFIG (sección 1).
-    Cada cuánto se avisa "offline", se vigila el QR o se reintenta
-      => OFFLINE_SIGNAL_MS, QR_WATCHDOG_MS, QR_RETRY_MS (sección 1).
+    Cada cuánto se vigila el QR o se reintenta
+      => QR_WATCHDOG_MS, QR_RETRY_MS (sección 1).
     Protección anti-quemado
       => PIXEL_SHIFT_*, DIM_AFTER_MS, ACCENT_SHIFT_MS (sección 1) y
          la opacidad de "body.dimmed #dim-overlay" en el CSS.
@@ -757,7 +762,6 @@
             retryIntervalMs: 3000,    // reintento rápido tras un fallo estando online
             failuresToOffline: 2      // fallos seguidos para declarar "offline" (evita falsos cortes)
         };
-        var OFFLINE_SIGNAL_MS = 2000;     // sin internet: cada cuánto se repite el aviso "offline" a la app
         var QR_WATCHDOG_MS = 30000;       // cada cuánto se comprueba que el QR siga visible
         var QR_RETRY_MS = 5000;           // espera antes de reintentar si el QR falló
         var EMPTY_ID_RETRY_MS = 2000;     // espera antes de volver a pedir el ID si llegó vacío
@@ -780,7 +784,6 @@
         var failures = 0;                 // fallos de verificación seguidos (histéresis)
         var lastLatency = 0;              // ms que tardó la última verificación
         var qrCodeInstance = null;        // objeto QRCode actual (para poder borrarlo)
-        var offlineTimer = null;          // repite el aviso "offline" cada OFFLINE_SIGNAL_MS
         var qrWatchdogTimer = null;       // vigilancia periódica del QR
         var qrRetryTimer = null;          // reintento tras un error del QR
 
@@ -960,10 +963,17 @@
             el.qrWrapper.innerHTML = '<div class="loading-qr"></div>';
         }
 
-        /** Pone la pantalla en modo "sin internet". */
+        /**
+         * Pone la pantalla en modo "sin internet". Si ya hay ID, se conservan
+         * el ID y su QR en pantalla; solo cambia el aviso de estado.
+         */
         function updateUIForOfflineMode() {
-            setDeviceText('Sin conexión a internet', true);
-            setStatus('Esperando conexión a internet para solicitar ID...', false);
+            if (deviceId) {
+                setStatus('Sin conexión a internet. Esperando reconexión...', false);
+            } else {
+                setDeviceText('Sin conexión a internet', true);
+                setStatus('Esperando conexión a internet para solicitar ID...', false);
+            }
             el.logo.classList.remove('success');
         }
 
@@ -1070,6 +1080,23 @@
                 return !ctx || ctx.getImageData(0, 0, 1, 1).data[3] !== 0;
             }
             return false;
+        }
+
+        /**
+         * Al recuperar internet con un ID ya recibido: si el QR sigue en
+         * pantalla solo reanuda su vigilancia (sin enviar nada a la app);
+         * si desapareció, lo vuelve a dibujar.
+         */
+        function resumeQR() {
+            var box = el.qrWrapper.querySelector('.qr-box');
+            if (box && isQRVisible(box)) {
+                stopQRTimers();
+                setStatus('Código QR generado correctamente.', true);
+                el.logo.classList.add('success');
+                startQRWatchdog(box, deviceId);
+            } else {
+                generateQRCode(deviceId);
+            }
         }
 
         /**
@@ -1212,8 +1239,9 @@
         }
 
         /**
-         * Pasa a modo "sin internet": detiene el QR, avisa a la app ahora y
-         * cada OFFLINE_SIGNAL_MS, y muestra el aviso en pantalla.
+         * Pasa a modo "sin internet": detiene la vigilancia del QR, avisa a
+         * la app UNA sola vez y muestra el aviso en pantalla. El ID y su QR
+         * se conservan.
          */
         function handleOfflineStatus() {
             console.log('Estado: OFFLINE');
@@ -1221,29 +1249,25 @@
             internetStatus = 'offline';
             stopQRTimers();
 
-            clearInterval(offlineTimer);
             sendConnectionStatus();
-            offlineTimer = setInterval(sendConnectionStatus, OFFLINE_SIGNAL_MS);
-
             updateUIForOfflineMode();
         }
 
         /**
-         * Pasa a modo "con internet": deja de repetir el aviso offline,
-         * avisa a la app y, si venía de offline, vuelve a pedir el ID.
+         * Pasa a modo "con internet". Solo avisa a la app si se RECUPERÓ la
+         * conexión (venía de "offline"); la primera verificación con internet
+         * no envía nada. Si ya hay ID, lo conserva y reanuda el QR; si no,
+         * lo pide a la app.
          */
         function handleOnlineStatus() {
             console.log('Estado: ONLINE');
             var wasOffline = internetStatus === 'offline';
             isOnline = true;
             internetStatus = 'online';
-            clearInterval(offlineTimer);
-            offlineTimer = null;
 
-            sendConnectionStatus();
-            // Al arrancar el ID ya se pidió; solo se vuelve a pedir al recuperar la conexión
-            // o si todavía no hay ID.
-            if (wasOffline || !deviceId) requestDeviceId();
+            if (wasOffline) sendConnectionStatus();
+            if (!deviceId) requestDeviceId();
+            else if (wasOffline) resumeQR();
         }
 
         /**
@@ -1415,7 +1439,7 @@
         /** Límites y valores iniciales de orientación y escala. */
         var LAYOUT_CONFIG = {
             allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
-            defaultOrientation: 0,  // se usa si nunca se guardó una orientación en config.html
+            defaultOrientation: 90,  // se usa si nunca se guardó una orientación en config.html (igual que DEFAULT_CONFIG.orientation de config.html)
             defaultScale: 100,      // tamaño inicial en porcentaje
             minScale: 10,           // porcentaje mínimo aceptado
             maxScale: 300,          // porcentaje máximo aceptado
@@ -1799,7 +1823,6 @@
             // Limpieza al cerrar la página
             window.addEventListener('beforeunload', function () {
                 stopQRTimers();
-                clearInterval(offlineTimer);
             });
         }
 

@@ -37,7 +37,7 @@ Las pantallas que lo admiten reciben mediante `updateData()`:
 - `smartpizarra.orientation`: orientación guardada, `0`, `90`, `180` o `270`.
 - `smartpizarra.league`: opción guardada por `config.html` (`mlb`, `nba`, `nflnhl` o `none`).
 - `smartpizarra.scale`: escala en % guardada por `config.html` (10–300, botones −/+ de 5 en 5; 60 por defecto = zoom `0.6`, definido en `DEFAULT_CONFIG.scale` de config.html y `savedScaleDefault` de las otras tres pantallas, que deben coincidir; no confundir con `defaultScale`, que es el tamaño visual 100). **Solo se informa en los JSON; ninguna pantalla la aplica.** En los JSON viaja como **factor de zoom** (`% / 100`: 80% → `0.8`), porque la app lo usa como `z` en `document.body.style.zoom = z` de su código de giro/zoom de otra página. En `localStorage` se guarda en % entero. La escala visual de las pantallas sigue llegando por `updateData({scale})`.
-- La orientación por defecto es `0°` si no existe un valor guardado.
+- La orientación por defecto es `90°` si no existe un valor guardado (`DEFAULT_CONFIG.orientation` en config.html y `defaultOrientation` en las otras tres pantallas; deben coincidir).
 - Las pantallas de contenido usan `#stage` / `#scaler` y un gestor de layout para rotación y escala. Conserva el comportamiento de ajuste a pantalla.
 - `config.html` ofrece las categorías MLB, NBA, NFL & NHL y NINGUNO; al salir incluye solo la lista de ligas de la opción seleccionada (`leagues`).
 

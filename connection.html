@@ -50,7 +50,7 @@
   La orientación se elige y se guarda en config.html. Esta página la
   lee al abrirse del almacenamiento local del WebView (localStorage,
   clave "smartpizarra.orientation"). Si nunca se guardó ninguna, usa
-  0° (LAYOUT_CONFIG.defaultOrientation). Si llega "orientation" por
+  90° (LAYOUT_CONFIG.defaultOrientation). Si llega "orientation" por
   updateData, se ignora.
 
   CONTRATO DE SALIDA: mensajes enviados a la app
@@ -77,7 +77,7 @@
     localStorage en cada envío (ver withSavedConfig):
       "orientation":90,"scale":0.8,
       "leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"
-    Si nunca se guardó nada: 0, 0.6 y "none". "scale" es la escala
+    Si nunca se guardó nada: 90, 0.6 y "none". "scale" es la escala
     GUARDADA en config.html como factor de zoom (% / 100: 80% => 0.8)
     y solo se informa: no es la que se aplica en pantalla (esa llega
     por updateData, en %). Esta página no
@@ -895,7 +895,7 @@
       /** Límites y valores iniciales de orientación y escala. */
       var LAYOUT_CONFIG = {
         allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
-        defaultOrientation: 0, // se usa si nunca se guardó una orientación en config.html
+        defaultOrientation: 90, // se usa si nunca se guardó una orientación en config.html (igual que DEFAULT_CONFIG.orientation de config.html)
         defaultScale: 100, // tamaño inicial en porcentaje
         minScale: 10, // porcentaje mínimo aceptado
         maxScale: 300, // porcentaje máximo aceptado

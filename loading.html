@@ -43,7 +43,7 @@
   La orientación se elige y se guarda en config.html. Esta página la
   lee al abrirse del almacenamiento local del WebView (localStorage,
   clave "smartpizarra.orientation"). Si nunca se guardó ninguna, usa
-  0° (CONFIG.layout.defaultOrientation). Si llega "orientation" por
+  90° (CONFIG.layout.defaultOrientation). Si llega "orientation" por
   updateData, se ignora.
 
   CONTRATO DE SALIDA: mensaje enviado a la app
@@ -56,7 +56,7 @@
   connection.html y fingerprint.html.
   "orientation", "scale" y "leagues" son la configuración guardada en
   config.html (mismas claves que su JSON de "Salir", y que los mensajes
-  de connection.html y fingerprint.html). Si nunca se guardó nada: 0,
+  de connection.html y fingerprint.html). Si nunca se guardó nada: 90,
   0.6 y "none" (CONFIG.layout / CONFIG.league). "scale" va como factor
   de zoom (% / 100: 80% => 0.8) y solo se informa: NO es la escala
   aplicada en pantalla (esa llega por updateData, en %). Esta página no
@@ -484,7 +484,7 @@
           /** Ajustes de rotación y tamaño del contenido. */
           layout: {
             allowedOrientations: [0, 90, 180, 270], // grados permitidos (360 se trata como 0)
-            defaultOrientation: 0, // se usa si nunca se guardó una orientación en config.html
+            defaultOrientation: 90, // se usa si nunca se guardó una orientación en config.html (igual que DEFAULT_CONFIG.orientation de config.html)
             /** Clave de localStorage donde config.html guarda la orientación.
                     Debe ser IGUAL en config.html, loading.html, connection.html y fingerprint.html. */
             orientationKey: "smartpizarra.orientation",
